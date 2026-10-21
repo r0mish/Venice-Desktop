@@ -85,6 +85,13 @@ test("application de bout en bout", async (t) => {
     await send("Un chat roux sur un toit de Venise");
     await d.waitVisible(".gen-image img");
     await idle(d);
+    // Visionneuse : zoom puis fermeture.
+    await d.click(".gen-image img");
+    await d.waitFor(() => document.querySelector("#lightbox").open, { message: "visionneuse ouverte" });
+    await d.click('#lightbox [data-lb="in"]');
+    await d.waitFor(() => document.querySelector("#lb-zoom").textContent !== "100 %", { message: "zoom appliqué" });
+    await d.click('#lightbox [data-lb="close"]');
+    await d.waitFor(() => !document.querySelector("#lightbox").open, { message: "visionneuse fermée" });
     let req = requests.at(-1);
     assert.equal(req.path, "/v1/image/generate");
     assert.equal(req.prompt, "Un chat roux sur un toit de Venise");
@@ -101,6 +108,30 @@ test("application de bout en bout", async (t) => {
     assert.equal(req.width, undefined);
     await d.click("#img-toggle");
     await d.waitFor(() => document.querySelector("#model-select").value === "zai-org-glm-5-1", { message: "retour aux modèles de texte" });
+  });
+
+  await step(t, "plusieurs instructions système au choix", async () => {
+    await d.click("#open-settings");
+    await d.waitFor(() => document.querySelector("#settings").open, { message: "réglages ouverts" });
+    for (const [name, text] of [["Admin", "Tu es admin. MARQUEUR-ADMIN"], ["Traducteur", "Tu traduis. MARQUEUR-TRAD"]]) {
+      await d.click("#s-prompt-add");
+      await d.type(".prompt-row:last-child [data-f=name]", name);
+      await d.type(".prompt-row:last-child [data-f=text]", text);
+    }
+    await d.click(".prompt-row:last-child [data-f=default]");
+    await d.click("#settings-save");
+    await d.waitFor(() => !document.querySelector("#settings").open, { message: "réglages enregistrés" });
+    await d.click("#new-chat");
+    await d.waitFor(() => !document.querySelector("#prompt-select").hidden, { message: "menu des instructions" });
+    assert.equal(await d.exec(() => document.querySelector("#prompt-select").selectedOptions[0].textContent), "Traducteur");
+    await send("INSTRUCTIONS : lesquelles ?");
+    await d.waitText("#messages", "Instructions reçues : MARQUEUR-TRAD");
+    await idle(d);
+    const admin = await d.exec(() => [...document.querySelectorAll("#prompt-select option")].find((o) => o.textContent === "Admin").value);
+    await setValue(d, "#prompt-select", admin);
+    await send("INSTRUCTIONS : et maintenant ?");
+    await d.waitText("#messages", "Instructions reçues : MARQUEUR-ADMIN");
+    await idle(d);
   });
 
   await step(t, "raisonnement <think> séparé de la réponse", async () => {

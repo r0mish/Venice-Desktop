@@ -78,6 +78,12 @@ export function projectPrompt(p: Project, files?: string): string {
   return parts.join("\n\n");
 }
 
+/** Instructions de l'utilisateur : celles enregistrées (à jour), sinon le texte gardé dans la conversation. */
+export function promptText(conv: Pick<Conversation, "promptId" | "systemPrompt">, settings: Settings): string {
+  const preset = conv.promptId ? settings.systemPrompts?.find((p) => p.id === conv.promptId) : undefined;
+  return preset?.text ?? conv.systemPrompt ?? "";
+}
+
 export function systemPrompt(conv: Conversation, settings: Settings, platform: Platform, extras: PromptExtras = {}): string {
   const parts: string[] = [];
   if (conv.kind === "code" && conv.workspace) {
@@ -87,7 +93,7 @@ export function systemPrompt(conv: Conversation, settings: Settings, platform: P
     if (conv.systemAccess) parts.push(SYSTEM_ACCESS_PROMPT);
   }
   if (extras.project) parts.push(projectPrompt(extras.project, extras.projectFiles));
-  const user = (conv.systemPrompt ?? settings.systemPrompt)?.trim();
+  const user = promptText(conv, settings).trim();
   if (user) parts.push(user);
   if (conv.webSearch) parts.push(WEB_PROMPT(!!extras.nativeSearch));
   return parts.join("\n\n");

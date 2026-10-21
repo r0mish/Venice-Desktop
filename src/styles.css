@@ -780,3 +780,34 @@ table.usage th { color: var(--muted); font-weight: 500; }
 }
 .icon-btn.on { color: var(--accent); }
 #composer.image-mode { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+
+/* ---------------------------------------------------------------- instructions système, visionneuse */
+#prompt-select { max-width: 170px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elev); font-size: 13px; color: var(--muted); }
+#prompt-select.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+#topbar #prompt-select { max-width: 150px; }
+.prompt-row { border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 10px; display: grid; gap: 8px; }
+.prompt-row .row { display: flex; align-items: center; gap: 8px; }
+.prompt-row .row input[data-f="name"] { flex: 1; min-width: 0; }
+.prompt-row label.check { margin: 0; white-space: nowrap; font-size: 13px; }
+.prompt-row textarea { width: 100%; resize: vertical; }
+.gen-image img, .msg-attachments img { cursor: zoom-in; }
+#lightbox {
+  width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0;
+  border: none; border-radius: 0; background: rgba(10, 10, 12, 0.94); color: #fff;
+  display: none; flex-direction: column;
+}
+#lightbox[open] { display: flex; }
+#lightbox::backdrop { background: rgba(0, 0, 0, 0.6); }
+.lb-stage { position: relative; flex: 1; overflow: hidden; cursor: zoom-out; touch-action: none; }
+.lb-stage.zoomed { cursor: grab; }
+.lb-stage.zoomed:active { cursor: grabbing; }
+#lb-img {
+  position: absolute; left: 50%; top: 50%; max-width: none; max-height: none;
+  transform-origin: center; user-select: none; cursor: inherit; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.lb-stage:not(.zoomed) #lb-img { cursor: zoom-in; }
+.lb-bar { display: flex; align-items: center; gap: 6px; padding: 8px 14px; background: rgba(0, 0, 0, 0.5); }
+.lb-bar .icon-btn { color: #fff; font-size: 18px; font-weight: 600; width: 34px; height: 34px; }
+.lb-bar .icon-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.lb-zoom { min-width: 64px; padding: 4px 8px; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 8px; background: transparent; color: #fff; font-size: 13px; }
+.lb-bar .spacer { flex: 1; }

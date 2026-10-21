@@ -4,7 +4,12 @@ export interface Settings {
   baseUrl: string;
   /** Vide = modèle par défaut désigné par Venice. */
   defaultModel: string;
+  /** Ancien champ (instruction unique), migré dans systemPrompts. */
   systemPrompt: string;
+  /** Instructions système enregistrées, au choix par conversation. */
+  systemPrompts: SystemPromptPreset[];
+  /** Instructions des nouvelles conversations (id ; vide = aucune). */
+  defaultPrompt: string;
   temperature: number | null;
   maxTokens: number | null;
   theme: "system" | "light" | "dark";
@@ -51,6 +56,12 @@ export interface Settings {
   imageHideWatermark: boolean;
   encryptData: boolean;
   settingsVersion?: number;
+}
+
+export interface SystemPromptPreset {
+  id: string;
+  name: string;
+  text: string;
 }
 
 export interface ModelInfo {
@@ -171,7 +182,10 @@ export interface Conversation {
   model: string;
   createdAt: number;
   updatedAt: number;
+  /** Texte des instructions au moment du choix (repli si l'instruction enregistrée est supprimée). */
   systemPrompt: string | null;
+  /** Instructions enregistrées choisies ("" = aucune ; absent = ancienne conversation). */
+  promptId?: string;
   messages: Message[];
   workspace?: string;
   permissionMode?: PermissionMode;

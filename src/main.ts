@@ -14,6 +14,7 @@ import { openRemoteWorkspace, toggleWsMenu } from "./chrome";
 import { renderUsage, stop } from "./run";
 import { openSettings, pollMcp, refreshKeyStatus } from "./settings-ui";
 import { initUpdates } from "./updates-ui";
+import { initLightbox } from "./lightbox";
 import "./attachments";
 
 $("#open-settings").addEventListener("click", () => openSettings());
@@ -88,6 +89,7 @@ async function init() {
     onWorkspaceAdded: () => api.listWorkspaces().then((w) => (state.workspaces = w)).catch(() => {}),
   });
   initDictation({ input: el.input, toast });
+  initLightbox({ toast });
   initGitUi({
     workspace: () => (opts().kind === "code" ? opts().workspace : undefined),
     model: () => state.selectedModel || state.settings.codeModel,

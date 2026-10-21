@@ -48,6 +48,7 @@ export function renderChrome() {
     el.convProject.value = o.projectId && findProject(o.projectId) ? o.projectId : "";
     el.convProject.classList.toggle("on", !!el.convProject.value);
   }
+  renderPromptSelect(o.promptId, c?.systemPrompt ?? null);
   if (o.kind !== "code" || !o.workspace) toggleGitPanel(false);
   if (o.kind === "code") scheduleGitRefresh(200);
   else el.gitBtn.hidden = true;
@@ -70,11 +71,36 @@ export function renderChrome() {
   el.input.placeholder =
     o.kind === "code" ? "Décrivez la tâche à réaliser dans le projet…" : img ? "Décrivez l'image à générer…" : "Écrivez à Venice…";
   el.mcpToggle.hidden ||= img;
+  el.promptSelect.hidden ||= img;
   el.composer.classList.toggle("image-mode", img);
   updateComposerState();
   renderUsage();
   renderActivity();
 }
+
+/** Instructions système de la conversation (barre du haut). */
+function renderPromptSelect(promptId: string | undefined, snapshot: string | null) {
+  const presets = state.settings.systemPrompts ?? [];
+  // Ancienne conversation ou instruction supprimée : son texte reste utilisé, affiché à part.
+  const orphan = !presets.some((p) => p.id === promptId) && !!snapshot?.trim();
+  el.promptSelect.hidden = !presets.length && !orphan;
+  if (el.promptSelect.hidden) return;
+  el.promptSelect.innerHTML =
+    '<option value="">Sans instructions</option>' +
+    (orphan ? '<option value="__keep">Instructions de la conversation</option>' : "") +
+    presets.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || "Sans nom")}</option>`).join("");
+  el.promptSelect.value = orphan ? "__keep" : (promptId ?? "");
+  el.promptSelect.classList.toggle("on", !!el.promptSelect.value);
+  const text = orphan ? snapshot! : presets.find((p) => p.id === promptId)?.text ?? "";
+  el.promptSelect.title = text ? `Instructions système :\n${text.slice(0, 600)}${text.length > 600 ? "…" : ""}` : "Aucune instruction système";
+}
+
+el.promptSelect.addEventListener("change", () => {
+  const id = el.promptSelect.value;
+  if (id === "__keep") return;
+  if (state.current) state.current.systemPrompt = state.settings.systemPrompts.find((p) => p.id === id)?.text ?? null;
+  setOpt("promptId", id);
+});
 
 el.webToggle.addEventListener("click", () => setOpt("webSearch", !opts().webSearch));
 el.imgToggle.addEventListener("click", () => {

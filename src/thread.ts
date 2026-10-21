@@ -9,6 +9,7 @@ import { autoGrow, copy, icons, isVenice, toast } from "./ui";
 import { chooseWorkspace, renderChrome, selectWorkspace } from "./chrome";
 import { runAgent, runImage, runTurn } from "./run";
 import { initSpeech, speak, speakingId } from "./speech";
+import { openLightbox } from "./lightbox";
 import { openSettings } from "./settings-ui";
 
 // ---------------------------------------------------------------- messages
@@ -258,18 +259,20 @@ el.messages.addEventListener("click", async (ev) => {
 
   const saveBtn = t.closest<HTMLElement>("[data-save-image]");
   if (saveBtn && state.current) {
-    const id = saveBtn.closest<HTMLElement>(".msg")?.dataset.id;
-    const m = state.current.messages.find((x) => x.id === id);
+    const m = state.current.messages.find((x) => x.id === saveBtn.closest<HTMLElement>(".msg")?.dataset.id);
     const src = m?.generated?.[Number(saveBtn.dataset.saveImage)];
     if (!m || !src) return;
-    const prompt = state.current.messages[state.current.messages.indexOf(m) - 1]?.content ?? "image";
-    const name = prompt.replace(/[^\p{L}\p{N} _-]+/gu, " ").trim().slice(0, 50).replace(/\s+/g, "-") || "image";
     try {
-      if (await api.saveImage(src, name)) toast("Image enregistrée");
+      if (await api.saveImage(src, imageName(m))) toast("Image enregistrée");
     } catch (e) {
       toast(String(e), true);
     }
     return;
+  }
+  const zoomImg = t.closest<HTMLImageElement>(".gen-image img, .msg-attachments img");
+  if (zoomImg && state.current) {
+    const m = state.current.messages.find((x) => x.id === zoomImg.closest<HTMLElement>(".msg")?.dataset.id);
+    return openLightbox(zoomImg.src, m?.generated?.length ? imageName(m) : null);
   }
 
   const codeBtn = t.closest<HTMLElement>(".copy-code");
@@ -295,6 +298,13 @@ el.messages.addEventListener("click", async (ev) => {
       return editMessage(msg, msgEl);
   }
 });
+
+/** Nom de fichier d'une image générée : début de la description qui l'a produite. */
+function imageName(m: Message): string {
+  const msgs = state.current?.messages ?? [];
+  const prompt = msgs[msgs.indexOf(m) - 1]?.content ?? "image";
+  return prompt.replace(/[^\p{L}\p{N} _-]+/gu, " ").trim().slice(0, 50).replace(/\s+/g, "-") || "image";
+}
 
 /** Texte d'un tour complet de l'agent (plusieurs messages assistant consécutifs). */
 function turnText(msg: Message): string {

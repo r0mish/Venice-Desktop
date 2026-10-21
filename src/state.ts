@@ -43,6 +43,7 @@ export const el = {
   projectSelect: $<HTMLSelectElement>("#project-select"),
   projectEdit: $<HTMLButtonElement>("#project-edit"),
   convProject: $<HTMLSelectElement>("#conv-project"),
+  promptSelect: $<HTMLSelectElement>("#prompt-select"),
 };
 
 /** Ce que fait l'agent en ce moment (barre d'activité). */
@@ -75,6 +76,8 @@ export interface Draft {
   systemAccess?: boolean;
   imageGen?: boolean;
   projectId?: string;
+  /** Instructions enregistrées ("" = aucune). */
+  promptId?: string;
 }
 
 export const state = {
@@ -172,6 +175,7 @@ export const opts = () => {
     mcp: c ? c.mcp !== false : state.draft.mcp,
     systemAccess: !!(c ? c.systemAccess : state.draft.systemAccess),
     imageGen: !!(c ? c.imageGen : state.draft.imageGen),
+    promptId: c ? c.promptId : state.draft.promptId,
     permissionMode: (c ? c.permissionMode : state.draft.permissionMode) ?? "ask",
     projectId: c ? c.projectId : state.draft.projectId,
   };

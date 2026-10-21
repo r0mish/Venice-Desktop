@@ -17,7 +17,12 @@ type R<T> = Result<T, String>;
 pub struct Settings {
     pub base_url: String,
     pub default_model: String,
+    /// Ancien champ (instruction unique), repris dans `system_prompts` à la migration.
     pub system_prompt: String,
+    /// Instructions système enregistrées, au choix par conversation.
+    pub system_prompts: Vec<SystemPrompt>,
+    /// Instructions des nouvelles conversations (id ; vide = aucune).
+    pub default_prompt: String,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub theme: String,
@@ -78,11 +83,22 @@ pub struct Settings {
     pub settings_version: u32,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct SystemPrompt {
+    pub id: String,
+    pub name: String,
+    pub text: String,
+}
+
 /// Version courante du format des réglages.
 const SETTINGS_VERSION: u32 = 1;
 
 /// Mises à niveau des réglages d'anciennes versions.
 fn migrate_settings(s: &mut Settings) {
+    if !s.system_prompt.trim().is_empty() && s.system_prompts.is_empty() {
+        s.system_prompts.push(SystemPrompt { id: "defaut".into(), name: "Instructions".into(), text: std::mem::take(&mut s.system_prompt) });
+        s.default_prompt = "defaut".into();
+    }
     if s.transcription_model.trim().is_empty() {
         s.transcription_model = crate::venice::TRANSCRIBE_MODEL.into();
     }
@@ -106,6 +122,8 @@ impl Default for Settings {
             base_url: crate::venice::DEFAULT_BASE_URL.into(),
             default_model: String::new(),
             system_prompt: String::new(),
+            system_prompts: Vec::new(),
+            default_prompt: String::new(),
             temperature: None,
             max_tokens: None,
             theme: "system".into(),
@@ -680,6 +698,17 @@ mod tests {
         assert!(s.encrypt_data && s.private_only && s.image_safe_mode && !s.venice_system_prompt);
         assert_eq!(s.base_url, crate::venice::DEFAULT_BASE_URL);
         assert_eq!(s.default_permission, "auto");
+    }
+
+    #[test]
+    fn single_system_prompt_becomes_a_preset() {
+        let mut s: Settings = serde_json::from_str(r#"{"systemPrompt":"Réponds en français."}"#).unwrap();
+        migrate_settings(&mut s);
+        assert_eq!(s.system_prompts, [SystemPrompt { id: "defaut".into(), name: "Instructions".into(), text: "Réponds en français.".into() }]);
+        assert_eq!(s.default_prompt, "defaut");
+        assert!(s.system_prompt.is_empty());
+        migrate_settings(&mut s);
+        assert_eq!(s.system_prompts.len(), 1);
     }
 
     #[test]

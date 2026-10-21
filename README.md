@@ -22,7 +22,8 @@ Venice exécute une grande partie de ses modèles open-weight (GLM, Qwen, DeepSe
 - Pièces jointes : **images** (modèles vision), **PDF** et **fichiers texte/code**, par bouton, glisser-déposer ou collage
 - Liste des modèles tirée de l'API : nom, contexte, tarif, vision, raisonnement, « non censuré » ; modèle **Automatique** = celui recommandé par Venice
 - Historique local : **recherche plein texte**, renommage, suppression, regroupement par date ; modifier un message, régénérer une réponse
-- Instructions système, température, tokens max, **export Markdown** (avec les sources)
+- **Plusieurs instructions système** enregistrées (rôle, ton, format…), au choix pour chaque conversation dans le menu du haut, une par défaut pour les nouvelles conversations
+- Température, tokens max, **export Markdown** (avec les sources)
 - **Lecture à voix haute** des réponses (bouton haut-parleur, Kokoro par défaut, voix française `ff_siwis`)
 
 ### Génération d'images
@@ -31,6 +32,7 @@ Bouton **Image** dans la zone de saisie (onglet Chat) : vos messages deviennent 
 ![Images](docs/screenshot-image.png)
 - Modèles d'image de Venice (liste de l'API), **format** choisi dans la zone de saisie (1:1, 16:9, 9:16…, ou les formats imposés par le modèle)
 - Prompt négatif, **mode sûr** (floutage du contenu adulte, activé par défaut), filigrane masqué
+- **Visionneuse** au clic sur l'image : zoom à la molette, au clic ou avec `+`/`−`, taille réelle (`1`), déplacement à la souris
 - Régénérer, **enregistrer** l'image (boîte « Enregistrer sous » native) ; images stockées dans la conversation, chiffrées comme le reste
 
 ### Projets

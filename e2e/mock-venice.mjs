@@ -59,6 +59,10 @@ function script(req) {
         "Prévoyez un parapluie : de nouvelles averses sont attendues en soirée^1,2^.",
     };
   }
+  if (ask.includes("INSTRUCTIONS")) {
+    const found = system.match(/MARQUEUR-\w+/g) ?? [];
+    return { content: `Instructions reçues : ${found.join(", ") || "aucune"}` };
+  }
   if (ask.includes("RÉFLÉCHIS")) {
     return { content: "<think>raisonnement caché</think>\n\nConclusion visible." };
   }

@@ -63,6 +63,7 @@
             <option value="acceptEdits">Modifs auto</option>
             <option value="auto">Autonome</option>
           </select>
+          <select id="prompt-select" title="Instructions système" hidden></select>
           <select id="conv-project" title="Projet de la conversation" hidden></select>
           <select id="model-select" title="Modèle"></select>
           <button id="export-btn" class="icon-btn" title="Exporter en Markdown" hidden>
@@ -181,13 +182,17 @@
             <legend>Modèle et génération</legend>
             <label>Modèle par défaut (Chat) <select id="s-model"></select></label>
             <p class="muted small">« Automatique » suit le modèle recommandé par Venice, qui évolue avec le catalogue.</p>
-            <label>Instructions système (appliquées aux nouvelles conversations)
-              <textarea id="s-system" rows="3" placeholder="Ex. : Réponds en français, de façon concise."></textarea>
-            </label>
             <div class="grid2">
               <label>Température <input id="s-temp" type="number" min="0" max="1.5" step="0.1" placeholder="défaut du modèle" /></label>
               <label>Tokens max <input id="s-max" type="number" min="1" step="1" placeholder="illimité" /></label>
             </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Instructions système</legend>
+            <p class="muted small">Enregistrez plusieurs jeux d'instructions (rôle, ton, format…) et choisissez-les pour chaque conversation dans le menu en haut de la fenêtre. Celui marqué « par défaut » s'applique aux nouvelles conversations.</p>
+            <div id="s-prompts"></div>
+            <button type="button" id="s-prompt-add" class="btn-ghost sm">+ Ajouter des instructions</button>
           </fieldset>
 
           <fieldset>
@@ -560,6 +565,21 @@
           <button type="submit" class="btn-primary" id="p-save">Enregistrer</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="lightbox" aria-label="Image">
+      <div class="lb-stage" id="lb-stage"><img id="lb-img" alt="image" draggable="false" /></div>
+      <div class="lb-bar">
+        <button type="button" class="icon-btn" data-lb="out" title="Dézoomer (−)">−</button>
+        <button type="button" class="lb-zoom" data-lb="fit" title="Ajuster à la fenêtre (0)" id="lb-zoom">100 %</button>
+        <button type="button" class="icon-btn" data-lb="in" title="Zoomer (+)">+</button>
+        <button type="button" class="icon-btn" data-lb="actual" title="Taille réelle (1)">1:1</button>
+        <span class="spacer"></span>
+        <button type="button" class="icon-btn" data-lb="save" title="Enregistrer l'image" id="lb-save">
+          <svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></svg>
+        </button>
+        <button type="button" class="icon-btn" data-lb="close" title="Fermer (Échap)">×</button>
+      </div>
     </dialog>
 
     <div id="toast" hidden></div>

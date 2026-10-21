@@ -1,9 +1,9 @@
 // Fenêtre des réglages : clé API, modèles, outils, MCP, chiffrement, consommation.
-import { api, type Settings } from "./api";
+import { api, type Settings, type SystemPromptPreset } from "./api";
 import { aggregate, fmtCost, fmtTokens } from "./usage";
 import { escapeHtml } from "./markdown";
 import { loadProjects } from "./projects-ui";
-import { $, defaultModelFor, el, errMsg, state } from "./state";
+import { $, defaultModelFor, el, errMsg, state, uid } from "./state";
 import { applyTheme, autoModel, copy, fillModelSelect, fillTopModelSelect, loadModels, toast } from "./ui";
 import { refreshConvs, renderSidebar } from "./sidebar";
 import { renderChrome } from "./chrome";
@@ -15,7 +15,7 @@ const s = {
   apiKey: $<HTMLInputElement>("#api-key"),
   keyStatus: $("#key-status"),
   model: $<HTMLSelectElement>("#s-model"),
-  system: $<HTMLTextAreaElement>("#s-system"),
+  prompts: $("#s-prompts"),
   temp: $<HTMLInputElement>("#s-temp"),
   max: $<HTMLInputElement>("#s-max"),
   theme: $<HTMLSelectElement>("#s-theme"),
@@ -68,6 +68,56 @@ const s = {
   vaultKey: $<HTMLInputElement>("#vault-key"),
   vaultKeyAction: $<HTMLButtonElement>("#vault-key-action"),
 };
+
+// ---------------------------------------------------------------- instructions système
+
+/** Copie en cours d'édition (enregistrée avec les réglages). */
+let prompts: SystemPromptPreset[] = [];
+let defaultPrompt = "";
+
+function renderPrompts() {
+  s.prompts.innerHTML = prompts.length
+    ? prompts
+        .map(
+          (p, i) => `<div class="prompt-row" data-i="${i}">
+            <div class="row">
+              <input data-f="name" value="${escapeHtml(p.name)}" placeholder="Nom (ex. : Admin Linux, Traducteur…)" spellcheck="false" />
+              <label class="check"><input type="checkbox" data-f="default"${p.id === defaultPrompt ? " checked" : ""} /> par défaut</label>
+              <button type="button" class="btn-ghost sm danger" data-del title="Supprimer ces instructions">Supprimer</button>
+            </div>
+            <textarea data-f="text" rows="3" placeholder="Ex. : Tu es un administrateur système Linux expérimenté. Réponds en français, avec des commandes prêtes à copier.">${escapeHtml(p.text)}</textarea>
+          </div>`,
+        )
+        .join("")
+    : '<p class="muted small">Aucune instruction enregistrée.</p>';
+}
+
+s.prompts.addEventListener("input", (e) => {
+  const t = e.target as HTMLInputElement | HTMLTextAreaElement;
+  const p = prompts[Number(t.closest<HTMLElement>(".prompt-row")?.dataset.i)];
+  if (!p) return;
+  if (t.dataset.f === "name") p.name = t.value;
+  else if (t.dataset.f === "text") p.text = t.value;
+});
+s.prompts.addEventListener("change", (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.dataset.f !== "default") return;
+  const p = prompts[Number(t.closest<HTMLElement>(".prompt-row")?.dataset.i)];
+  defaultPrompt = t.checked && p ? p.id : "";
+  renderPrompts();
+});
+s.prompts.addEventListener("click", (e) => {
+  const row = (e.target as HTMLElement).closest<HTMLElement>("[data-del]")?.closest<HTMLElement>(".prompt-row");
+  if (!row) return;
+  const [removed] = prompts.splice(Number(row.dataset.i), 1);
+  if (removed?.id === defaultPrompt) defaultPrompt = "";
+  renderPrompts();
+});
+$("#s-prompt-add").addEventListener("click", () => {
+  prompts.push({ id: uid().slice(0, 8), name: "", text: "" });
+  renderPrompts();
+  s.prompts.querySelector<HTMLInputElement>(".prompt-row:last-child [data-f=name]")?.focus();
+});
 
 function renderShellInfo() {
   const p = state.platform;
@@ -294,7 +344,9 @@ export async function openSettings(tab = "general") {
   fillModelSelect(s.model, st.defaultModel, { auto: true });
   fillModelSelect(s.codeModel, st.codeModel, { auto: true });
   fillModelSelect(s.imageModel, st.imageModel, { auto: true, kind: "image" });
-  s.system.value = st.systemPrompt;
+  prompts = (st.systemPrompts ?? []).map((p) => ({ ...p }));
+  defaultPrompt = st.defaultPrompt ?? "";
+  renderPrompts();
   s.temp.value = st.temperature?.toString() ?? "";
   s.max.value = st.maxTokens?.toString() ?? "";
   s.theme.value = st.theme;
@@ -378,7 +430,11 @@ $("#settings-form").addEventListener("submit", async (e) => {
     ...state.settings,
     baseUrl: s.base.value.trim() || "https://api.venice.ai/api/v1",
     defaultModel: s.model.value,
-    systemPrompt: s.system.value,
+    systemPrompt: "",
+    systemPrompts: prompts
+      .filter((p) => p.name.trim() || p.text.trim())
+      .map((p) => ({ ...p, name: p.name.trim() || "Sans nom" })),
+    defaultPrompt: "",
     temperature: num(s.temp.value),
     maxTokens: num(s.max.value),
     theme: s.theme.value as Settings["theme"],
@@ -412,6 +468,7 @@ $("#settings-form").addEventListener("submit", async (e) => {
     transcriptionVocabulary: s.sttVocab.value,
     encryptData: s.encrypt.checked,
   };
+  next.defaultPrompt = next.systemPrompts.some((p) => p.id === defaultPrompt) ? defaultPrompt : "";
   try {
     next.prices = parsePrices(s.prices.value);
   } catch (err) {
@@ -441,6 +498,7 @@ $("#settings-form").addEventListener("submit", async (e) => {
       state.selectedModel = defaultModelFor(state.mode);
       state.draft.webSearch = next.webSearchDefault;
       state.draft.permissionMode = next.defaultPermission;
+      state.draft.promptId = next.defaultPrompt;
     }
     if (next.imageModel !== prev.imageModel) state.selectedImageModel = next.imageModel || autoModel("image");
     el.settings.close();

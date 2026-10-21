@@ -256,6 +256,7 @@ export function newChat() {
     webSearch: state.settings.webSearchDefault,
     mcp: true,
     imageGen,
+    promptId: state.settings.systemPrompts.some((p) => p.id === state.settings.defaultPrompt) ? state.settings.defaultPrompt : "",
     permissionMode: state.settings.defaultPermission ?? "auto",
     projectId: state.projectFilter || undefined,
   };
