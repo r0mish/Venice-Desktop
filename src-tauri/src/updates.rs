@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
-const REPO: &str = "r0mish/venice-desktop";
+const REPO: &str = "r0mish/Venice-Desktop";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

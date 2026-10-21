@@ -138,7 +138,7 @@ Emplacements locaux :
 
 ### Binaires
 
-Installateurs dans les [Releases](https://github.com/r0mish/venice-desktop/releases) : `.dmg` (macOS Apple Silicon et Intel), `.exe`/`.msi` (Windows), `.deb`, `.rpm` et `.AppImage` (Linux).
+Installateurs dans les [Releases](https://github.com/r0mish/Venice-Desktop/releases) : `.dmg` (macOS Apple Silicon et Intel), `.exe`/`.msi` (Windows), `.deb`, `.rpm` et `.AppImage` (Linux).
 
 Une release est construite et publiée automatiquement pour tous les systèmes dès qu'une version jamais publiée (`version` dans `src-tauri/tauri.conf.json`) arrive sur `main` ; lancement manuel possible : Actions → Release → Run workflow.
 
