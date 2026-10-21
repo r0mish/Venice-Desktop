@@ -1,0 +1,190 @@
+// Tests de bout en bout : l'application réelle (Rust + WebView) pilotée par tauri-driver,
+// contre un faux serveur Venice. Données isolées dans un dossier temporaire.
+//
+//   npx tauri build --debug --no-bundle
+//   xvfb-run -a npm run test:e2e        (Linux, avec tauri-driver et WebKitWebDriver)
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { requests } from "./mock-venice.mjs";
+import { idle, launch, send as sendTo, setValue, step as stepOf } from "./harness.mjs";
+
+let app;
+let d;
+let workspace;
+
+before(async () => {
+  app = await launch(({ root, data }) => {
+    workspace = join(root, "projet");
+    mkdirSync(join(workspace, "notes"), { recursive: true });
+    // Dossier de projet déjà autorisé (la boîte de dialogue native n'est pas pilotable).
+    writeFileSync(join(data, "workspaces.json"), JSON.stringify([workspace]));
+    writeFileSync(join(workspace, "AGENTS.md"), "# Consignes\n\nToujours respecter RÈGLE-E2E-42.\n");
+  });
+  d = app.d;
+});
+
+after(() => app?.close());
+
+const step = (t, name, fn) => stepOf(t, d, name, fn);
+const send = (text) => sendTo(d, text);
+
+test("application de bout en bout", async (t) => {
+  await step(t, "démarrage et liste des modèles", async () => {
+    await d.waitVisible(".welcome h2");
+    await d.waitFor(() => [...document.querySelectorAll("#model-select option")].some((o) => o.value === "modele-e2e-vision"), {
+      message: "modèle du faux serveur dans la liste",
+    });
+    // Modèles « anonymisés » (fournisseurs tiers) masqués par défaut.
+    assert.ok(!(await d.exec(() => [...document.querySelectorAll("#model-select option")].some((o) => o.value === "modele-tiers-e2e"))));
+    assert.equal(await d.exec(() => document.querySelector("#model-select").value), "zai-org-glm-5-1");
+  });
+
+  await step(t, "conversation en streaming", async () => {
+    await send("Bonjour depuis le test");
+    await d.waitText("#messages", "pamplemousse");
+    await idle(d);
+    const req = requests.at(-1);
+    assert.equal(req.auth, "Bearer cle-e2e");
+    assert.equal(req.model, "zai-org-glm-5-1");
+    assert.ok(req.stream, "requête en streaming");
+    assert.equal(req.venice_parameters.include_venice_system_prompt, false, "invite système de Venice désactivée par défaut");
+    assert.equal(req.venice_parameters.enable_web_search, "off");
+    assert.deepEqual(req.stream_options, { include_usage: true });
+    await d.waitText("#conv-list", "Bonjour depuis le test");
+    await d.waitText("#activity", "Terminé");
+  });
+
+  await step(t, "recherche web intégrée : sources citées", async () => {
+    await d.click("#new-chat");
+    await d.click("#web-toggle");
+    await send("CHERCHE la météo de demain à Paris");
+    await d.waitText("#messages", "temps pluvieux");
+    await idle(d);
+    const req = requests.at(-1);
+    assert.equal(req.venice_parameters.enable_web_search, "auto");
+    assert.equal(req.venice_parameters.enable_web_citations, true);
+    assert.ok(!req.tools?.some((t) => t.function.name === "web_search"), "pas d'outil web_search avec la recherche intégrée");
+    await d.waitText(".sources summary", "2 sources");
+    const links = await d.exec(() => [...document.querySelectorAll(".msg.assistant .md a")].map((a) => [a.textContent, a.getAttribute("href")]));
+    assert.deepEqual(links, [
+      ["[1]", "https://meteofrance.example/paris"],
+      ["[1]", "https://meteofrance.example/paris"],
+      ["[2]", "https://infoclimat.example/paris"],
+    ]);
+    await d.click("#web-toggle");
+  });
+
+  await step(t, "génération d'image", async () => {
+    await d.click("#new-chat");
+    await d.waitVisible("#img-toggle");
+    await d.click("#img-toggle");
+    await d.waitFor(() => document.querySelector("#model-select").value === "image-e2e", { message: "modèle d'image par défaut" });
+    await setValue(d, "#img-aspect", "16:9");
+    await send("Un chat roux sur un toit de Venise");
+    await d.waitVisible(".gen-image img");
+    await idle(d);
+    let req = requests.at(-1);
+    assert.equal(req.path, "/v1/image/generate");
+    assert.equal(req.prompt, "Un chat roux sur un toit de Venise");
+    assert.deepEqual([req.width, req.height, req.safe_mode, req.format], [1280, 720, true, "webp"]);
+    // Modèle à formats imposés : aspect_ratio au lieu de width/height.
+    await setValue(d, "#model-select", "image-format-e2e");
+    await d.waitFor(() => [...document.querySelectorAll("#img-aspect option")].length === 2, { message: "formats du modèle" });
+    await setValue(d, "#img-aspect", "16:9");
+    await d.click('.msg.assistant [data-act="retry"]');
+    await d.waitFor(() => document.querySelectorAll(".gen-image img").length === 1 && !document.querySelector("#app").classList.contains("is-streaming"), { message: "nouvelle image" });
+    req = requests.at(-1);
+    assert.equal(req.model, "image-format-e2e");
+    assert.equal(req.aspect_ratio, "16:9");
+    assert.equal(req.width, undefined);
+    await d.click("#img-toggle");
+    await d.waitFor(() => document.querySelector("#model-select").value === "zai-org-glm-5-1", { message: "retour aux modèles de texte" });
+  });
+
+  await step(t, "raisonnement <think> séparé de la réponse", async () => {
+    await send("RÉFLÉCHIS puis conclus");
+    await d.waitText("#messages", "Conclusion visible.");
+    await idle(d);
+    const last = await d.exec(() => [...document.querySelectorAll(".msg.assistant")].pop().querySelector(":scope > .md").textContent);
+    assert.ok(!last.includes("raisonnement caché"), last);
+    await d.waitFor(() => [...document.querySelectorAll(".reasoning")].pop()?.textContent.includes("raisonnement caché"), { message: "bloc de raisonnement" });
+  });
+
+  await step(t, "recherche dans le contenu des conversations", async () => {
+    await d.type("#search", "pamplemousse");
+    await d.waitFor(() => document.querySelector("#conv-list mark")?.textContent?.toLowerCase() === "pamplemousse", {
+      message: "extrait surligné",
+    });
+    await setValue(d, "#search", "", "input");
+  });
+
+  await step(t, "réglages", async () => {
+    await d.click("#open-settings");
+    await d.waitFor(() => document.querySelector("#settings").open, { message: "réglages ouverts" });
+    await d.click('.settings-tabs [data-tab="code"]');
+    await d.waitVisible('#settings .tab[data-tab="code"]');
+    await d.click("#settings-cancel");
+    await d.waitFor(() => !document.querySelector("#settings").open, { message: "réglages fermés" });
+  });
+
+  await step(t, "projet : consignes envoyées au modèle", async () => {
+    await setValue(d, "#project-select", "__new");
+    await d.waitFor(() => document.querySelector("#project-dialog").open, { message: "fenêtre du projet" });
+    await d.type("#p-name", "Projet E2E");
+    await d.type("#p-instructions", "Respecter CONSIGNE-PROJET-E2E.");
+    await d.click("#p-save");
+    await d.waitFor(() => !document.querySelector("#project-dialog").open, { message: "projet enregistré" });
+    await d.click("#new-chat");
+    await d.waitText(".welcome", "Projet E2E");
+    await send("PROJET : as-tu les consignes ?");
+    await d.waitText("#messages", "Projet reçu : CONSIGNE-PROJET-E2E");
+    await idle(d);
+  });
+
+  await step(t, "code : AGENTS.md chargé", async () => {
+    await d.click('.mode-tabs [data-mode="code"]');
+    await d.waitText(".welcome", "Nouvelle session de code");
+    await d.click(".welcome [data-ws]");
+    await d.waitText(".welcome", "AGENTS.md");
+    await send("CONSIGNES : lesquelles ?");
+    await d.waitText("#messages", "Consignes reçues : RÈGLE-E2E-42");
+    await idle(d);
+    assert.equal(requests.at(-1).model, "qwen3-coder-e2e", "modèle de code par défaut (rôle default_code)");
+  });
+
+  await step(t, "code : écriture approuvée", async () => {
+    await send("ÉCRIS un fichier de notes");
+    await d.waitVisible('[data-approve="allow"]');
+    assert.ok(!existsSync(join(workspace, "notes/e2e.txt")), "rien d'écrit avant l'approbation");
+    await d.click('[data-approve="allow"]');
+    await d.waitText("#messages", "Outil terminé");
+    await idle(d);
+    assert.equal(readFileSync(join(workspace, "notes/e2e.txt"), "utf8"), "créé par le test e2e\n");
+  });
+
+  await step(t, "code : écriture refusée", async () => {
+    await send("ÉCRIS encore");
+    await d.click('[data-approve="deny"]');
+    await d.waitText("#activity", "refusé");
+    await idle(d);
+  });
+
+  await step(t, "mode par défaut des nouvelles sessions", async () => {
+    await d.click("#open-settings");
+    await d.click('.settings-tabs [data-tab="code"]');
+    assert.equal(await d.exec(() => document.querySelector("#s-permission").value), "ask");
+    await setValue(d, "#s-permission", "auto");
+    await d.click("#settings-save");
+    await d.waitFor(() => !document.querySelector("#settings").open, { message: "réglages enregistrés" });
+    await d.click("#new-chat");
+    await d.click(".welcome [data-ws]");
+    assert.equal(await d.exec(() => document.querySelector("#perm-select").value), "auto");
+    // Autonome : l'écriture se fait sans demande d'approbation.
+    await send("ÉCRIS sans demander");
+    await d.waitText("#messages", "Outil terminé");
+    await idle(d);
+    assert.equal(await d.exec(() => document.querySelectorAll("[data-approve]").length), 0);
+  });
+});

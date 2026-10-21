@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14a3ad"/>
+      <stop offset="0.55" stop-color="#0b6f78"/>
+      <stop offset="1" stop-color="#0b3550"/>
+    </linearGradient>
+    <linearGradient id="v" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d9f4f5"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+  <!-- V -->
+  <path d="M300 225 L512 650 L724 225" fill="none" stroke="url(#v)" stroke-width="104" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- vagues de la lagune -->
+  <path d="M250 790 q65 -46 130 0 t130 0 t130 0 t130 0" fill="none" stroke="#ffffff" stroke-opacity="0.85" stroke-width="40" stroke-linecap="round"/>
+</svg>
