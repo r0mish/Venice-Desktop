@@ -62,15 +62,15 @@ jobs:
                 "",
                 "| Système | Fichier |",
                 "|---|---|",
-                "| macOS Apple Silicon (M1…M4) | `Venice.Desktop_*_aarch64.dmg` |",
+                "| macOS Apple Silicon / ARM (M1…M4) | `Venice.Desktop_*_arm64.dmg` |",
                 "| macOS Intel | `Venice.Desktop_*_x64.dmg` |",
                 "| Windows | `Venice.Desktop_*_x64-setup.exe` ou `Venice.Desktop_*_x64_fr-FR.msi` |",
                 "| Linux Debian/Ubuntu | `.deb` |",
                 "| Linux Fedora/openSUSE | `.rpm` |",
                 "| Linux (toutes distributions) | `.AppImage` |",
                 "",
-                "Binaires non signés :",
-                "- **macOS** : `xattr -cr \"/Applications/Venice Desktop.app\"` au premier lancement",
+                "Binaires non signés par un éditeur (signature ad hoc sur macOS) :",
+                "- **macOS** : au premier lancement, Réglages Système → Confidentialité et sécurité → « Ouvrir quand même », ou `xattr -cr \"/Applications/Venice Desktop.app\"`",
                 "- **Windows** : SmartScreen → « Informations complémentaires » → « Exécuter quand même »",
               ].join("\n"),
               draft: true,
@@ -157,6 +157,19 @@ jobs:
           RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
         with:
           script: |
+            const release_id = Number(process.env.RELEASE_ID);
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { ...repo, release_id, per_page: 100 });
+            const signed = assets.some((a) => a.name.endsWith(".sig"));
+            for (const a of assets) {
+              if (a.name.endsWith("_aarch64.dmg")) {
+                // Nom courant pour les Mac Apple Silicon : arm64 plutôt que aarch64 (même architecture).
+                await github.rest.repos.updateReleaseAsset({ ...repo, asset_id: a.id, name: a.name.replace("_aarch64.dmg", "_arm64.dmg") });
+              } else if (!signed && a.name.endsWith(".app.tar.gz")) {
+                // Archives destinées aux mises à jour automatiques : inutiles sans signature.
+                await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: a.id });
+              }
+            }
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,

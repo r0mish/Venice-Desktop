@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Venice Desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "dev.r0mish.venice-desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -50,6 +50,10 @@
         ],
         "displayLanguageSelector": false
       }
+    },
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
     }
   },
   "plugins": {

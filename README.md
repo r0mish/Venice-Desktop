@@ -138,12 +138,12 @@ Emplacements locaux :
 
 ### Binaires
 
-Installateurs dans les [Releases](https://github.com/r0mish/Venice-Desktop/releases) : `.dmg` (macOS Apple Silicon et Intel), `.exe`/`.msi` (Windows), `.deb`, `.rpm` et `.AppImage` (Linux).
+Installateurs dans les [Releases](https://github.com/r0mish/Venice-Desktop/releases) : `_arm64.dmg` (Mac Apple Silicon M1…M4) et `_x64.dmg` (Mac Intel), `.exe`/`.msi` (Windows), `.deb`, `.rpm` et `.AppImage` (Linux).
 
 Une release est construite et publiée automatiquement pour tous les systèmes dès qu'une version jamais publiée (`version` dans `src-tauri/tauri.conf.json`) arrive sur `main` ; lancement manuel possible : Actions → Release → Run workflow.
 
 Les binaires ne sont pas signés :
-- **macOS** : `xattr -cr "/Applications/Venice Desktop.app"` au premier lancement
+- **macOS** (signature ad hoc, sans compte développeur Apple) : au premier lancement, macOS bloque l'app ; ouvrez Réglages Système → Confidentialité et sécurité → « Ouvrir quand même ». Ou, dans un terminal : `xattr -cr "/Applications/Venice Desktop.app"`
 - **Windows** : SmartScreen → « Informations complémentaires » → « Exécuter quand même »
 
 ### Mises à jour signées (mainteneurs)
