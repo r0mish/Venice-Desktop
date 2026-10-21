@@ -63,7 +63,6 @@ jobs:
                 "| Système | Fichier |",
                 "|---|---|",
                 "| macOS Apple Silicon / ARM (M1…M4) | `Venice.Desktop_*_arm64.dmg` |",
-                "| macOS Intel | `Venice.Desktop_*_x64.dmg` |",
                 "| Windows | `Venice.Desktop_*_x64-setup.exe` ou `Venice.Desktop_*_x64_fr-FR.msi` |",
                 "| Linux Debian/Ubuntu | `.deb` |",
                 "| Linux Fedora/openSUSE | `.rpm` |",
@@ -85,10 +84,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Mac Apple Silicon (ARM) uniquement : pas de build Intel.
           - platform: macos-latest
             args: --target aarch64-apple-darwin
-          - platform: macos-latest
-            args: --target x86_64-apple-darwin
           - platform: ubuntu-22.04
             args: ""
           - platform: windows-latest
@@ -110,7 +108,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - uses: swatinem/rust-cache@v2
         with:
