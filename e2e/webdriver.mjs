@@ -60,13 +60,22 @@ export class Driver {
   }
 
   async click(css) {
-    await this.waitVisible(css);
+    await this.reveal(css);
     await this.cmd("POST", `/element/${await this.find(css)}/click`, {});
   }
 
   async type(css, text) {
-    await this.waitVisible(css);
+    await this.reveal(css);
     await this.cmd("POST", `/element/${await this.find(css)}/value`, { text });
+  }
+
+  /**
+   * Attend l'élément puis le fait défiler à l'écran : les anciennes versions de WebKitWebDriver
+   * ne défilent pas les conteneurs (fenêtre des réglages) et refusent alors l'interaction.
+   */
+  async reveal(css) {
+    await this.waitVisible(css);
+    await this.exec((sel) => document.querySelector(sel)?.scrollIntoView({ block: "center" }), css);
   }
 
   /** Texte visible de la page (ou d'un élément). */
