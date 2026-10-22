@@ -1,6 +1,6 @@
 [package]
 name = "venice-desktop"
-version = "0.1.3"
+version = "0.2.0"
 description = "Client de bureau léger et respectueux de la vie privée pour l'API Venice.ai"
 authors = ["r0mish"]
 license = "MIT"
