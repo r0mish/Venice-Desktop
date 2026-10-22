@@ -1,12 +1,12 @@
 // Barre du haut et compositeur : options de la conversation, consignes AGENTS.md, choix du dossier.
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { api, type InstructionFile, type PermissionMode } from "./api";
+import { api, type InstructionFile, type MediaMode, type PermissionMode } from "./api";
 import { escapeHtml } from "./markdown";
 import { openSshDialog, parseRemote, workspaceLabel } from "./ssh-ui";
 import { scheduleGitRefresh, toggleGitPanel } from "./git-ui";
 import { findProject, projectList } from "./projects-ui";
 import { el, errMsg, opts, state, type Draft } from "./state";
-import { copy, fillTopModelSelect, icons, isVenice, toast, visibleModels } from "./ui";
+import { autoModel, copy, fillTopModelSelect, icons, isVenice, toast, visibleModels } from "./ui";
 import { openCharacterDialog } from "./characters-ui";
 import { newChat, projectOptions } from "./sidebar";
 import { renderConversation, renderWelcome } from "./thread";
@@ -57,11 +57,19 @@ export function renderChrome() {
   else el.gitBtn.hidden = true;
   el.permSelect.hidden = o.kind !== "code";
   el.permSelect.value = o.permissionMode;
-  const img = o.kind === "chat" && o.imageGen;
+  const media = state.mediaMode;
+  const img = media === "image";
+  const creating = !!media;
   el.webToggle.classList.toggle("on", o.webSearch);
-  el.webToggle.hidden = img;
-  el.imgToggle.hidden = o.kind !== "chat" || !isVenice() || !state.imageModels.length;
+  el.webToggle.hidden = creating;
+  const venice = o.kind === "chat" && isVenice();
+  el.imgToggle.hidden = !venice || !state.imageModels.length;
   el.imgToggle.classList.toggle("on", img);
+  el.vidToggle.hidden = !venice || !state.videoModels.length;
+  el.vidToggle.classList.toggle("on", media === "video");
+  el.musicToggle.hidden = !venice || !state.musicModels.length;
+  el.musicToggle.classList.toggle("on", media === "music");
+  renderMediaOpts(media === "video" || media === "music" ? media : undefined);
   el.imgAspect.hidden = !img;
   el.imgVariants.hidden = !img;
   el.imgVariants.value = String(state.imageVariants || state.settings.imageVariants || 1);
@@ -76,12 +84,20 @@ export function renderChrome() {
   el.mcpToggle.querySelector("span")!.textContent = `MCP ${mcpToolCount()}`;
   el.mcpToggle.title = state.mcp.map((s) => `${s.name} : ${s.state === "ready" ? `${s.tools.length} outils` : s.state}`).join("\n");
   el.input.placeholder =
-    o.kind === "code" ? "Décrivez la tâche à réaliser dans le projet…" : img ? "Décrivez l'image à générer…" : "Écrivez à Venice…";
-  el.mcpToggle.hidden ||= img;
-  el.promptSelect.hidden ||= img;
-  el.effortSelect.hidden ||= img;
-  el.compareSelect.hidden ||= img || o.kind !== "chat";
-  el.composer.classList.toggle("image-mode", img);
+    o.kind === "code"
+      ? "Décrivez la tâche à réaliser dans le projet…"
+      : img
+        ? "Décrivez l'image à générer…"
+        : media === "video"
+          ? "Décrivez la vidéo (joignez une image pour l'animer)…"
+          : media === "music"
+            ? "Décrivez la musique ou le son (paroles éventuelles après une ligne « Paroles : »)…"
+            : "Écrivez à Venice…";
+  el.mcpToggle.hidden ||= creating;
+  el.promptSelect.hidden ||= creating;
+  el.effortSelect.hidden ||= creating;
+  el.compareSelect.hidden ||= creating || o.kind !== "chat";
+  el.composer.classList.toggle("image-mode", creating);
   updateComposerState();
   renderUsage();
   renderActivity();
@@ -171,9 +187,60 @@ function renderCompareSelect(model: string) {
 el.compareSelect.addEventListener("change", () => setOpt("compareModel", el.compareSelect.value));
 
 el.webToggle.addEventListener("click", () => setOpt("webSearch", !opts().webSearch));
-el.imgToggle.addEventListener("click", () => {
-  setOpt("imageGen", !opts().imageGen);
+/** Bascule de création : un clic active ce mode (image, vidéo, musique), un second revient au texte. */
+function toggleMedia(mode: MediaMode) {
+  setOpt("imageGen", false);
+  setOpt("media", state.mediaMode === mode ? "" : mode);
   fillTopModelSelect();
+  renderChrome();
+}
+el.imgToggle.addEventListener("click", () => toggleMedia("image"));
+el.vidToggle.addEventListener("click", () => toggleMedia("video"));
+el.musicToggle.addEventListener("click", () => toggleMedia("music"));
+
+const sel = (key: string, label: string, values: string[], current: string, fmt = (v: string) => v) =>
+  `<select class="aspect-select" data-opt="${key}" title="${escapeHtml(label)}">${values
+    .map((v) => `<option value="${escapeHtml(v)}"${v === current ? " selected" : ""}>${escapeHtml(fmt(v))}</option>`)
+    .join("")}</select>`;
+
+/** Options de la vidéo (durée, format, résolution, son) ou de la musique (durée, instrumental). */
+function renderMediaOpts(kind: "video" | "music" | undefined) {
+  el.mediaOpts.hidden = !kind;
+  if (!kind) return;
+  const o = state.mediaOpts;
+  if (kind === "video") {
+    const m = state.videoModels.find((x) => x.id === (state.selectedVideoModel || autoModel("video")));
+    const c = ((m?.spec ?? {}) as { constraints?: { durations?: string[]; aspect_ratios?: string[]; resolutions?: string[]; audio_configurable?: boolean } }).constraints ?? {};
+    const pick = (v: string, list: string[] = []) => (list.includes(v) ? v : (list[0] ?? ""));
+    o.duration = pick(o.duration, c.durations);
+    o.aspect = pick(o.aspect, c.aspect_ratios);
+    o.resolution = pick(o.resolution, c.resolutions);
+    el.mediaOpts.innerHTML =
+      (c.durations?.length ? sel("duration", "Durée", c.durations, o.duration) : "") +
+      (c.aspect_ratios?.length ? sel("aspect", "Format", c.aspect_ratios, o.aspect) : "") +
+      (c.resolutions?.length ? sel("resolution", "Résolution", c.resolutions, o.resolution) : "") +
+      (c.audio_configurable ? `<button type="button" class="toggle${o.audio ? " on" : ""}" data-opt-toggle="audio" title="Bande son générée">Son</button>` : "");
+  } else {
+    const m = state.musicModels.find((x) => x.id === (state.selectedMusicModel || autoModel("music")));
+    const spec = (m?.spec ?? {}) as { duration_options?: number[]; default_duration?: number; supports_force_instrumental?: boolean };
+    const durations = (spec.duration_options ?? []).map(String);
+    if (!durations.includes(o.duration)) o.duration = String(spec.default_duration ?? durations[0] ?? "");
+    el.mediaOpts.innerHTML =
+      (durations.length ? sel("duration", "Durée", durations, o.duration, (v) => `${v} s`) : "") +
+      (spec.supports_force_instrumental ? `<button type="button" class="toggle${o.instrumental ? " on" : ""}" data-opt-toggle="instrumental" title="Sans voix">Instrumental</button>` : "");
+  }
+}
+
+el.mediaOpts.addEventListener("change", (e) => {
+  const t = e.target as HTMLSelectElement;
+  const key = t.dataset.opt as "duration" | "aspect" | "resolution" | undefined;
+  if (key) state.mediaOpts[key] = t.value;
+});
+el.mediaOpts.addEventListener("click", (e) => {
+  const key = (e.target as HTMLElement).closest<HTMLElement>("[data-opt-toggle]")?.dataset.optToggle as "audio" | "instrumental" | undefined;
+  if (!key) return;
+  state.mediaOpts[key] = !state.mediaOpts[key];
+  renderChrome();
 });
 
 const ASPECTS = ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"];

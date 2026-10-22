@@ -69,9 +69,9 @@ function byTrait(list: ModelInfo[], ...traits: string[]): ModelInfo | undefined 
 }
 
 /** Choix automatique : modèle par défaut de Venice, en respectant l'option « modèles privés ». */
-export function autoModel(kind: "chat" | "code" | "image" | "edit"): string {
-  if (kind === "image") {
-    const list = visibleModels(state.imageModels);
+export function autoModel(kind: "chat" | "code" | "image" | "edit" | "video" | "music"): string {
+  if (kind === "image" || kind === "video" || kind === "music") {
+    const list = visibleModels(modelsOf(kind));
     return (byTrait(list, "default") ?? list[0])?.id ?? "";
   }
   if (kind === "edit") {
@@ -119,8 +119,25 @@ export function modelTitle(m: ModelInfo | undefined): string {
  * Remplit un <select> de modèles. `auto` : première option « Automatique » (valeur vide).
  * `kind` image : liste des modèles d'image.
  */
-export function fillModelSelect(select: HTMLSelectElement, value: string, { auto = false, kind = "text" as "text" | "image" | "edit" } = {}) {
-  const source = kind === "image" ? state.imageModels : kind === "edit" ? state.editModels : state.models;
+/** Modèles d'une catégorie. */
+export function modelsOf(kind: ModelKind): ModelInfo[] {
+  switch (kind) {
+    case "image":
+      return state.imageModels;
+    case "edit":
+      return state.editModels;
+    case "video":
+      return state.videoModels;
+    case "music":
+      return state.musicModels;
+    default:
+      return state.models;
+  }
+}
+export type ModelKind = "text" | "image" | "edit" | "video" | "music";
+
+export function fillModelSelect(select: HTMLSelectElement, value: string, { auto = false, kind = "text" as ModelKind } = {}) {
+  const source = modelsOf(kind);
   const list = visibleModels(source);
   const extras = kind === "text" ? [state.current?.model, value] : [value];
   const options = list.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(modelLabel(m))}</option>`);
@@ -137,19 +154,30 @@ export function fillModelSelect(select: HTMLSelectElement, value: string, { auto
   select.title = modelTitle(source.find((m) => m.id === select.value));
 }
 
-/** Sélecteur du haut : modèles de texte, ou d'image quand la génération d'images est active. */
+/** Sélecteur du haut : modèles de texte, ou de la création active (image, vidéo, musique). */
 export function fillTopModelSelect() {
-  if (state.imageMode) fillModelSelect(el.modelSelect, state.selectedImageModel, { kind: "image" });
-  else fillModelSelect(el.modelSelect, state.selectedModel);
+  switch (state.mediaMode) {
+    case "image":
+      return fillModelSelect(el.modelSelect, state.selectedImageModel, { kind: "image" });
+    case "video":
+      return fillModelSelect(el.modelSelect, state.selectedVideoModel, { kind: "video" });
+    case "music":
+      return fillModelSelect(el.modelSelect, state.selectedMusicModel, { kind: "music" });
+    default:
+      fillModelSelect(el.modelSelect, state.selectedModel);
+  }
 }
 
 export async function loadModels() {
   if (!state.keyConfigured) return;
   const none = Promise.resolve([] as ModelInfo[]);
-  const [text, image, edit] = await Promise.allSettled([
+  const venice = isVenice();
+  const [text, image, edit, video, music] = await Promise.allSettled([
     api.listModels("text"),
-    isVenice() ? api.listModels("image") : none,
-    isVenice() ? api.listModels("inpaint") : none,
+    venice ? api.listModels("image") : none,
+    venice ? api.listModels("inpaint") : none,
+    venice ? api.listModels("video") : none,
+    venice ? api.listModels("music") : none,
   ]);
   if (text.status === "fulfilled") {
     state.models = text.value;
@@ -160,6 +188,10 @@ export async function loadModels() {
   }
   if (image.status === "fulfilled") state.imageModels = image.value;
   if (edit.status === "fulfilled") state.editModels = edit.value;
+  if (video.status === "fulfilled") state.videoModels = video.value;
+  if (music.status === "fulfilled") state.musicModels = music.value;
+  state.selectedVideoModel ||= state.settings.videoModel || autoModel("video");
+  state.selectedMusicModel ||= state.settings.musicModel || autoModel("music");
   if (!state.current) state.selectedModel = defaultModelFor(state.mode);
   state.selectedImageModel ||= state.settings.imageModel || autoModel("image");
   fillTopModelSelect();

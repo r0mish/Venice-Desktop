@@ -649,11 +649,25 @@ pub fn is_model_error(e: &str) -> bool {
     (l.contains("erreur api 400") || l.contains("erreur api 404") || l.contains("erreur api 422")) && l.contains("model")
 }
 
+/// Fichier audio à transcrire : contenu, nom et type MIME.
+pub struct AudioFile {
+    pub bytes: Vec<u8>,
+    pub name: String,
+    pub mime: String,
+}
+
+impl AudioFile {
+    pub fn wav(bytes: Vec<u8>) -> Self {
+        Self { bytes, name: "dictee.wav".into(), mime: "audio/wav".into() }
+    }
+}
+
 /// `prompt` : vocabulaire à favoriser (Whisper et serveurs compatibles ; ignoré sinon).
-pub async fn transcribe(base: &str, key: &str, model: &str, language: &str, prompt: &str, wav: Vec<u8>) -> Result<String, String> {
-    let part = reqwest::multipart::Part::bytes(wav)
-        .file_name("dictee.wav")
-        .mime_str("audio/wav")
+/// `timestamps` : texte découpé en segments horodatés « [mm:ss] … ».
+pub async fn transcribe(base: &str, key: &str, model: &str, language: &str, prompt: &str, file: AudioFile, timestamps: bool) -> Result<String, String> {
+    let part = reqwest::multipart::Part::bytes(file.bytes)
+        .file_name(file.name)
+        .mime_str(&file.mime)
         .map_err(|e| e.to_string())?;
     let mut form = reqwest::multipart::Form::new()
         .text("model", model.to_owned())
@@ -665,7 +679,10 @@ pub async fn transcribe(base: &str, key: &str, model: &str, language: &str, prom
     if !prompt.is_empty() {
         form = form.text("prompt", prompt.to_owned());
     }
-    let mut req = client()?.post(endpoint(base, "audio/transcriptions")).multipart(form).timeout(Duration::from_secs(300));
+    if timestamps {
+        form = form.text("timestamps", "true");
+    }
+    let mut req = client()?.post(endpoint(base, "audio/transcriptions")).multipart(form).timeout(Duration::from_secs(900));
     if !key.is_empty() {
         req = req.bearer_auth(key);
     }
@@ -674,7 +691,125 @@ pub async fn transcribe(base: &str, key: &str, model: &str, language: &str, prom
         return Err(api_error(resp).await);
     }
     let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+    if timestamps {
+        if let Some(text) = timestamped(&v) {
+            return Ok(text);
+        }
+    }
     v["text"].as_str().map(|t| t.trim().to_owned()).ok_or_else(|| "Réponse de transcription invalide".into())
+}
+
+/// Segments horodatés d'une transcription (`timestamps.segment` de Venice, `segments` de Whisper).
+fn timestamped(v: &Value) -> Option<String> {
+    let segs = v.pointer("/timestamps/segment").or_else(|| v.get("segments"))?.as_array()?;
+    let lines: Vec<String> = segs
+        .iter()
+        .filter_map(|s| {
+            let t = s["start"].as_f64()? as u64;
+            let text = s["text"].as_str()?.trim();
+            (!text.is_empty()).then(|| format!("[{:02}:{:02}] {text}", t / 60, t % 60))
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// Clone une voix à partir d'un échantillon : renvoie l'identifiant (`vv_…`) à utiliser avec `model`.
+pub async fn clone_voice(base: &str, key: &str, model: &str, file: AudioFile) -> Result<String, String> {
+    if !is_venice(base) {
+        return Err("Le clonage de voix nécessite l'API Venice.".into());
+    }
+    let part = reqwest::multipart::Part::bytes(file.bytes).file_name(file.name).mime_str(&file.mime).map_err(|e| e.to_string())?;
+    let form = reqwest::multipart::Form::new().text("model", model.to_owned()).part("file", part);
+    let resp = client()?
+        .post(endpoint(base, "audio/voices"))
+        .bearer_auth(key)
+        .multipart(form)
+        .timeout(Duration::from_secs(180))
+        .send()
+        .await
+        .map_err(|e| format!("Connexion impossible : {e}"))?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
+    let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+    v["id"].as_str().map(str::to_owned).ok_or_else(|| "Réponse de clonage invalide".into())
+}
+
+/// Générations longues en file d'attente : vidéo (`video/…`) ou audio/musique (`audio/…`).
+#[derive(Clone, Copy)]
+pub enum JobKind {
+    Video,
+    Audio,
+}
+
+impl JobKind {
+    fn prefix(self) -> &'static str {
+        match self {
+            JobKind::Video => "video",
+            JobKind::Audio => "audio",
+        }
+    }
+}
+
+pub enum Poll {
+    Processing { average: f64, elapsed: f64 },
+    Done { bytes: Vec<u8>, mime: String },
+}
+
+/// Prix estimé en $ (None si l'API ne sait pas l'estimer).
+pub async fn quote(base: &str, key: &str, kind: JobKind, body: &Value) -> Option<f64> {
+    let resp = client().ok()?.post(endpoint(base, &format!("{}/quote", kind.prefix()))).bearer_auth(key).json(body).timeout(Duration::from_secs(30)).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<Value>().await.ok()?["quote"].as_f64()
+}
+
+pub async fn queue(base: &str, key: &str, kind: JobKind, body: &Value) -> Result<String, String> {
+    if !is_venice(base) {
+        return Err("Les générations vidéo et audio nécessitent l'API Venice.".into());
+    }
+    let resp = client()?
+        .post(endpoint(base, &format!("{}/queue", kind.prefix())))
+        .bearer_auth(key)
+        .json(body)
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| format!("Connexion impossible : {e}"))?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
+    let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+    v["queue_id"].as_str().map(str::to_owned).ok_or_else(|| "Réponse de mise en file invalide".into())
+}
+
+/// État d'une génération ; le média est supprimé des serveurs de Venice une fois récupéré.
+pub async fn retrieve(base: &str, key: &str, kind: JobKind, model: &str, queue_id: &str) -> Result<Poll, String> {
+    let resp = client()?
+        .post(endpoint(base, &format!("{}/retrieve", kind.prefix())))
+        .bearer_auth(key)
+        .json(&json!({ "model": model, "queue_id": queue_id, "delete_media_on_completion": true }))
+        .timeout(Duration::from_secs(600))
+        .send()
+        .await
+        .map_err(|e| format!("Connexion impossible : {e}"))?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
+    let mime = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("").to_owned();
+    if mime.starts_with("application/json") {
+        let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+        return match v["status"].as_str() {
+            Some("PROCESSING") | Some("QUEUED") | None => Ok(Poll::Processing {
+                average: v["average_execution_time"].as_f64().unwrap_or(0.0),
+                elapsed: v["execution_duration"].as_f64().unwrap_or(0.0),
+            }),
+            Some(other) => Err(format!("Génération en échec ({other})")),
+        };
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
+    Ok(Poll::Done { bytes, mime: if mime.is_empty() { "application/octet-stream".into() } else { mime } })
 }
 
 /// Synthèse vocale : renvoie l'audio MP3.
@@ -1054,6 +1189,16 @@ mod tests {
         let img = model_info(&json!({ "id": "flux", "type": "image", "model_spec": { "pricing": { "generation": { "usd": 0.01 } } } })).unwrap();
         assert!(!img.vision && !img.tools);
         assert_eq!(img.image_price, Some(0.01));
+    }
+
+    #[test]
+    fn transcript_segments_are_timestamped() {
+        let v = json!({ "text": "a b", "timestamps": { "segment": [
+            { "text": " Bonjour ", "start": 0.4, "end": 2.0 },
+            { "text": "suite", "start": 75.2, "end": 77.0 }
+        ] } });
+        assert_eq!(timestamped(&v).unwrap(), "[00:00] Bonjour\n[01:15] suite");
+        assert!(timestamped(&json!({ "text": "x" })).is_none());
     }
 
     #[test]

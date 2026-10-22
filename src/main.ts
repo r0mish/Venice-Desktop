@@ -18,6 +18,7 @@ import { initLightbox } from "./lightbox";
 import { initTemplates } from "./templates-ui";
 import { checkBudget } from "./budget";
 import { openGallery } from "./gallery-ui";
+import { initVoice, stopVoice } from "./voice-ui";
 import "./attachments";
 
 $("#open-settings").addEventListener("click", () => openSettings());
@@ -65,6 +66,8 @@ window.addEventListener("keydown", (e) => {
     // WebKitGTK ne ferme pas toujours le <dialog> natif avec Échap.
     e.preventDefault();
     [...document.querySelectorAll<HTMLDialogElement>("dialog[open]")].pop()!.close();
+  } else if (e.key === "Escape" && stopVoice()) {
+    e.preventDefault();
   } else if (e.key === "Escape" && cancelDictation()) {
     e.preventDefault();
   } else if (e.key === "Escape" && state.busy) {
@@ -95,6 +98,7 @@ async function init() {
   initDictation({ input: el.input, toast });
   initLightbox({ toast });
   initTemplates();
+  initVoice();
   initGitUi({
     workspace: () => (opts().kind === "code" ? opts().workspace : undefined),
     model: () => state.selectedModel || state.settings.codeModel,

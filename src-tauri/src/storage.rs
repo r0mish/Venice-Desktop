@@ -72,6 +72,13 @@ pub struct Settings {
     pub transcription_url: String,
     /// Termes à favoriser par la transcription (un par ligne ou séparés par des virgules).
     pub transcription_vocabulary: String,
+    /// Transcription de fichiers : segments horodatés.
+    pub transcription_timestamps: bool,
+    /// Voix clonées : identifiant (`vv_…`), nom et modèle associé.
+    pub cloned_voices: Vec<ClonedVoice>,
+    /// Modèles vidéo et musique (vide = défaut de Venice).
+    pub video_model: String,
+    pub music_model: String,
     /// Lecture à voix haute : modèle, voix et vitesse.
     pub tts_model: String,
     pub tts_voice: String,
@@ -91,6 +98,13 @@ pub struct Settings {
     /// Version du format des réglages, pour les migrations (absent = 0).
     #[serde(default)]
     pub settings_version: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ClonedVoice {
+    pub id: String,
+    pub name: String,
+    pub model: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -162,6 +176,10 @@ impl Default for Settings {
             transcription_language: "fr".into(),
             transcription_url: String::new(),
             transcription_vocabulary: String::new(),
+            transcription_timestamps: false,
+            cloned_voices: Vec::new(),
+            video_model: String::new(),
+            music_model: String::new(),
             tts_model: "tts-kokoro".into(),
             tts_voice: "ff_siwis".into(),
             tts_speed: 1.0,
@@ -254,6 +272,36 @@ fn conv_dir(app: &AppHandle) -> R<PathBuf> {
     ensure_dir(data_dir(app)?.join("conversations"))
 }
 
+fn media_dir(app: &AppHandle) -> R<PathBuf> {
+    ensure_dir(data_dir(app)?.join("media"))
+}
+
+/// Média généré (vidéo, musique) : fichier à part, chiffré comme les conversations.
+pub fn save_media(app: &AppHandle, bytes: &[u8]) -> R<String> {
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    write_secret(&media_dir(app)?.join(format!("{id}.bin")), bytes)?;
+    Ok(id)
+}
+
+pub fn read_media(app: &AppHandle, id: &str) -> R<Vec<u8>> {
+    check_id(id)?;
+    read_secret(&media_dir(app)?.join(format!("{id}.bin")))
+}
+
+/// Identifiants des médias référencés dans une valeur JSON (messages, versions…).
+fn media_ids(v: &Value, out: &mut Vec<String>) {
+    match v {
+        Value::Object(o) => {
+            if let Some(id) = o.get("media").and_then(|m| m.get("id")).and_then(Value::as_str) {
+                out.push(id.to_owned());
+            }
+            o.values().for_each(|x| media_ids(x, out));
+        }
+        Value::Array(a) => a.iter().for_each(|x| media_ids(x, out)),
+        _ => {}
+    }
+}
+
 fn settings_path(app: &AppHandle) -> R<PathBuf> {
     Ok(ensure_dir(app.path().app_config_dir().map_err(|e| e.to_string())?)?.join("settings.json"))
 }
@@ -285,9 +333,9 @@ fn read_secret(path: &Path) -> R<Vec<u8>> {
 /// Fichiers contenant des données personnelles.
 fn secret_files(app: &AppHandle) -> R<Vec<PathBuf>> {
     let mut out = Vec::new();
-    for dir in [conv_dir(app)?, projects_dir(app)?] {
+    for dir in [conv_dir(app)?, projects_dir(app)?, media_dir(app)?] {
         for e in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
-            if e.path().extension().and_then(|x| x.to_str()) == Some("json") {
+            if matches!(e.path().extension().and_then(|x| x.to_str()), Some("json" | "bin")) {
                 out.push(e.path());
             }
         }
@@ -483,6 +531,14 @@ pub fn delete_conversation(app: &AppHandle, id: &str) -> R<()> {
     check_id(id)?;
     let path = conv_dir(app)?.join(format!("{id}.json"));
     if path.exists() {
+        // Médias de la conversation (vidéos, musiques) supprimés avec elle.
+        if let Ok(conv) = load_conversation(app, id) {
+            let mut ids = Vec::new();
+            media_ids(&serde_json::to_value(&conv).unwrap_or_default(), &mut ids);
+            for m in ids.iter().filter(|m| check_id(m).is_ok()) {
+                let _ = fs::remove_file(media_dir(app)?.join(format!("{m}.bin")));
+            }
+        }
         fs::remove_file(&path).map_err(|e| e.to_string())?;
     }
     let mut idx = read_index(app)?;
@@ -762,6 +818,17 @@ mod tests {
         assert!(s.system_prompt.is_empty());
         migrate_settings(&mut s);
         assert_eq!(s.system_prompts.len(), 1);
+    }
+
+    #[test]
+    fn media_ids_are_found_everywhere() {
+        let v = serde_json::json!({ "messages": [
+            { "media": { "id": "abc", "kind": "video" } },
+            { "branches": [{ "tail": [{ "media": { "id": "def" } }] }] }
+        ] });
+        let mut ids = Vec::new();
+        media_ids(&v, &mut ids);
+        assert_eq!(ids, ["abc", "def"]);
     }
 
     #[test]

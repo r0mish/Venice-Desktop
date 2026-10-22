@@ -147,9 +147,10 @@ export function toApiMessages(conv: Conversation, system: string): ApiMessage[] 
       continue;
     }
     const calls = m.toolCalls ?? [];
-    if (m.generated?.length) {
-      // Image générée : le modèle de texte sait seulement qu'elle existe.
-      out.push({ role: "assistant", content: `[Image générée par ${m.model ?? "un modèle d'image"} à partir de la demande précédente]` });
+    if (m.generated?.length || m.media) {
+      // Image, vidéo ou audio générés : le modèle de texte sait seulement qu'ils existent.
+      const what = m.media?.kind === "video" ? "Vidéo générée" : m.media ? "Audio généré" : "Image générée";
+      out.push({ role: "assistant", content: `[${what} par ${m.model ?? "un modèle"} à partir de la demande précédente]` });
     } else if (calls.length) {
       out.push({
         role: "assistant",

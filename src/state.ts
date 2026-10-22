@@ -1,5 +1,5 @@
 // État partagé de l'interface : éléments du DOM, conversation ouverte, brouillon et options effectives.
-import type { ConversationSummary, Conversation, InstructionFile, Kind, McpServerStatus, ModelInfo, PermissionMode, ProjectContext, Risk, Settings, TextFile, ToolContext, UpdateInfo } from "./api";
+import type { ConversationSummary, Conversation, InstructionFile, Kind, McpServerStatus, MediaMode, ModelInfo, PermissionMode, ProjectContext, Risk, Settings, TextFile, ToolContext, UpdateInfo } from "./api";
 import { systemPrompt, type Platform } from "./agent";
 import { parseRemote } from "./ssh-ui";
 import { findProject, projectChars } from "./projects-ui";
@@ -24,6 +24,10 @@ export const el = {
   fileInput: $<HTMLInputElement>("#file-input"),
   webToggle: $<HTMLButtonElement>("#web-toggle"),
   imgToggle: $<HTMLButtonElement>("#img-toggle"),
+  vidToggle: $<HTMLButtonElement>("#vid-toggle"),
+  musicToggle: $<HTMLButtonElement>("#music-toggle"),
+  mediaOpts: $("#media-opts"),
+  voiceBtn: $<HTMLButtonElement>("#voice-btn"),
   imgAspect: $<HTMLSelectElement>("#img-aspect"),
   imgVariants: $<HTMLSelectElement>("#img-variants"),
   seedChip: $<HTMLButtonElement>("#seed-chip"),
@@ -86,6 +90,7 @@ export interface Draft {
   reasoningEffort?: string;
   character?: { slug: string; name: string };
   compareModel?: string;
+  media?: MediaMode | "";
 }
 
 export const state = {
@@ -96,6 +101,12 @@ export const state = {
   imageModels: [] as ModelInfo[],
   /** Modèles de retouche d'image par un texte. */
   editModels: [] as ModelInfo[],
+  videoModels: [] as ModelInfo[],
+  musicModels: [] as ModelInfo[],
+  selectedVideoModel: "",
+  selectedMusicModel: "",
+  /** Options de la prochaine vidéo / musique (durée, format, résolution, son, instrumental). */
+  mediaOpts: { duration: "", aspect: "", resolution: "", audio: true, instrumental: false },
   convs: [] as ConversationSummary[],
   workspaces: [] as string[],
   mcp: [] as McpServerStatus[],
@@ -112,9 +123,13 @@ export const state = {
   imageVariants: 0,
   /** Graine imposée aux prochaines générations (null = au hasard). */
   lockedSeed: null as number | null,
-  /** Génération d'images active pour la conversation ou le brouillon (mode Chat). */
+  /** Création active (image, vidéo, musique) pour la conversation ou le brouillon (mode Chat). */
+  get mediaMode(): MediaMode | undefined {
+    const o = opts();
+    return o.kind === "chat" ? o.media : undefined;
+  },
   get imageMode(): boolean {
-    return opts().kind === "chat" && opts().imageGen;
+    return this.mediaMode === "image";
   },
   risks: new Map<string, Risk>(),
   approvals: new Map<string, (d: "allow" | "always" | "deny") => void>(),
@@ -189,6 +204,11 @@ export const opts = () => {
     mcp: c ? c.mcp !== false : state.draft.mcp,
     systemAccess: !!(c ? c.systemAccess : state.draft.systemAccess),
     imageGen: !!(c ? c.imageGen : state.draft.imageGen),
+    // Ancien interrupteur « imageGen » repris comme mode de création « image ».
+    media: (() => {
+      const m = c ? c.media : state.draft.media;
+      return m === undefined ? ((c ? c.imageGen : state.draft.imageGen) ? ("image" as const) : undefined) : m || undefined;
+    })(),
     promptId: c ? c.promptId : state.draft.promptId,
     compareModel: (c ? c.compareModel : state.draft.compareModel) ?? "",
     reasoningEffort: (c ? c.reasoningEffort : state.draft.reasoningEffort) ?? "",

@@ -159,6 +159,61 @@ test("application de bout en bout", async (t) => {
     await d.waitFor(() => document.querySelector("#model-select").value === "zai-org-glm-5-1", { message: "retour aux modèles de texte" });
   });
 
+  await step(t, "vidéo et musique", async () => {
+    await d.click("#new-chat");
+    await d.waitVisible("#vid-toggle");
+    await d.click("#vid-toggle");
+    await d.waitFor(() => document.querySelector("#model-select").value === "video-e2e", { message: "modèle vidéo" });
+    await setValue(d, '#media-opts [data-opt="duration"]', "10s");
+    await send("Un drone survole Venise au lever du soleil");
+    await d.waitVisible(".gen-media video", 30000);
+    await idle(d);
+    let q = requests.filter((r) => r.path === "/v1/video/queue").at(-1);
+    assert.deepEqual([q.model, q.duration, q.aspect_ratio, q.resolution, q.audio], ["video-e2e", "10s", "16:9", "720p", true]);
+    await d.waitText("#activity", "0,250");
+    await d.click("#music-toggle");
+    await d.waitFor(() => document.querySelector("#model-select").value === "music-e2e", { message: "modèle de musique" });
+    await d.click('#media-opts [data-opt-toggle="instrumental"]');
+    await setValue(d, "#input", "Jazz calme au piano\nParoles :\nla la la", "input");
+    await d.click("#send-btn");
+    await d.waitVisible(".gen-media audio", 30000);
+    await idle(d);
+    q = requests.filter((r) => r.path === "/v1/audio/queue").at(-1);
+    assert.deepEqual([q.prompt, q.lyrics_prompt, q.force_instrumental, q.duration_seconds], ["Jazz calme au piano", "la la la", true, 30]);
+    await d.click("#music-toggle");
+    await d.waitFor(() => document.querySelector("#model-select").value === "zai-org-glm-5-1", { message: "retour au texte" });
+  });
+
+  await step(t, "transcription d'un fichier audio et clonage de voix", async () => {
+    await d.click("#new-chat");
+    // Dépôt d'un fichier audio : transcrit puis joint comme texte.
+    await d.exec(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array(4096)], "memo-e2e.mp3", { type: "audio/mpeg" }));
+      window.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true }));
+    });
+    await d.waitText("#attachments", "memo-e2e.mp3 (transcription)");
+    await send("Résume ce mémo");
+    await idle(d);
+    const sent = requests.filter((r) => r.messages).at(-1).messages.at(-1).content;
+    assert.ok(sent.includes("Transcription simulée du mémo"), sent);
+    // Clonage de voix depuis les réglages.
+    await d.click("#open-settings");
+    await d.click('.settings-tabs [data-tab="tools"]');
+    await d.type("#s-clone-name", "Voix test");
+    await d.exec(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([new Uint8Array(8192)], "voix.wav", { type: "audio/wav" }));
+      const input = document.querySelector("#s-clone-file");
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change"));
+    });
+    await d.waitText("#s-clone-status", "Voix test");
+    assert.equal(await d.exec(() => document.querySelector("#s-tts-voice").value), "vv_e2e123");
+    assert.equal(requests.filter((r) => r.path === "/v1/audio/voices").at(-1).model, "tts-chatterbox-hd");
+    await d.click("#settings-cancel");
+  });
+
   await step(t, "plusieurs instructions système au choix", async () => {
     await d.click("#open-settings");
     await d.waitFor(() => document.querySelector("#settings").open, { message: "réglages ouverts" });

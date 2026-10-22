@@ -7,7 +7,7 @@ import { workspaceLabel } from "./ssh-ui";
 import { scheduleGitRefresh } from "./git-ui";
 import { findProject } from "./projects-ui";
 import { el, errMsg, maxContext, modelInfo, opts, state, sysPrompt, toolCtx, uid, type Activity, type RunOutcome } from "./state";
-import { autoGrow, autoModel, modelTitle, toast } from "./ui";
+import { autoGrow, autoModel, modelsOf, modelTitle, toast } from "./ui";
 import { refreshConvs, renderSidebar } from "./sidebar";
 import { loadInstructions, renderChrome, toggleWsMenu, updateComposerState } from "./chrome";
 import { guessRisk, renderConversation, rerenderMessage, scrollBottom } from "./thread";
@@ -45,12 +45,19 @@ export async function send() {
     return toggleWsMenu(true);
   }
   const model = state.selectedModel;
-  const imageGen = state.imageMode;
-  if (imageGen && (images.length || files.length)) {
-    toast("La génération d'images n'utilise pas les pièces jointes : retirez-les ou désactivez « Image ».", true);
+  const media = state.mediaMode;
+  // Vidéo : une image jointe sert d'image de départ ; sinon, pas de pièces jointes en création.
+  const allowed = media === "video" ? images.length <= 1 && !files.length : !images.length && !files.length;
+  if (media && !allowed) {
+    toast(
+      media === "video"
+        ? "Vidéo : joignez au plus une image de départ, sans autre fichier."
+        : "La génération n'utilise pas les pièces jointes : retirez-les ou revenez au mode texte.",
+      true,
+    );
     return;
   }
-  if (!imageGen && images.length && modelInfo(model)?.vision === false) {
+  if (!media && images.length && modelInfo(model)?.vision === false) {
     toast(`Le modèle ${model} ne gère pas les images : choisissez un modèle marqué « vision ».`, true);
     return;
   }
@@ -76,7 +83,7 @@ export async function send() {
       webSearch: o.webSearch,
       mcp: o.mcp,
       ...(o.kind === "code" && o.systemAccess ? { systemAccess: true } : {}),
-      ...(o.kind === "chat" && o.imageGen ? { imageGen: true } : {}),
+      ...(o.kind === "chat" && o.media ? { media: o.media } : {}),
       ...(o.projectId ? { projectId: o.projectId } : {}),
     };
   }
@@ -87,6 +94,8 @@ export async function send() {
     createdAt: Date.now(),
     ...(images.length ? { images: [...images] } : {}),
     ...(files.length ? { files: [...files] } : {}),
+    // Image de départ d'une vidéo : jamais envoyée au modèle de texte.
+    ...(media && images.length ? { imageOp: true } : {}),
   });
   el.input.value = "";
   autoGrow(el.input);
@@ -96,7 +105,17 @@ export async function send() {
 }
 
 /** Réponse au dernier message : texte (agent) ou image selon le mode de la conversation. */
-export const runTurn = () => (state.imageMode ? runImage() : runAgent());
+export const runTurn = () => {
+  switch (state.mediaMode) {
+    case "image":
+      return runImage();
+    case "video":
+    case "music":
+      return runQueued(state.mediaMode);
+    default:
+      return runAgent();
+  }
+};
 
 
 // ---------------------------------------------------------------- activité, contexte, consommation
@@ -148,7 +167,7 @@ el.activity.addEventListener("click", (e) => {
 
 export function renderUsage() {
   const c = state.current;
-  if (!c || !c.messages.length || state.imageMode) {
+  if (!c || !c.messages.length || state.mediaMode) {
     el.ctxMeter.hidden = true;
     el.usageInfo.hidden = true;
     return;
@@ -686,6 +705,59 @@ export async function runImage() {
   });
 }
 
+/** Vidéo ou musique : mise en file chez Venice, suivi de la progression, média enregistré localement. */
+export async function runQueued(kind: "video" | "music") {
+  const conv = state.current;
+  if (!conv) return;
+  const last = [...conv.messages].reverse().find((m) => m.role === "user");
+  let prompt = last?.content.trim() ?? "";
+  const model = kind === "video" ? state.selectedVideoModel || autoModel("video") : state.selectedMusicModel || autoModel("music");
+  const info = (kind === "video" ? state.videoModels : state.musicModels).find((m) => m.id === model);
+  const spec = (info?.spec ?? {}) as Record<string, unknown>;
+  const o = state.mediaOpts;
+  const request: Record<string, unknown> = { model };
+  if (kind === "video") {
+    const c = (spec.constraints ?? {}) as { durations?: string[]; aspect_ratios?: string[]; resolutions?: string[]; model_type?: string; audio_configurable?: boolean };
+    const pick = (v: string, list?: string[]) => (list?.length ? (list.includes(v) ? v : list[0]) : undefined);
+    request.prompt = prompt;
+    request.duration = pick(o.duration, c.durations) ?? (o.duration || "5s");
+    const aspect = pick(o.aspect, c.aspect_ratios);
+    const resolution = pick(o.resolution, c.resolutions);
+    if (aspect) request.aspect_ratio = aspect;
+    if (resolution) request.resolution = resolution;
+    if (c.audio_configurable) request.audio = o.audio;
+    const image = last?.images?.[0];
+    if (image) request.image_url = image;
+    if (c.model_type === "image-to-video" && !image) {
+      toast("Ce modèle anime une image : joignez l'image de départ.", true);
+      return;
+    }
+  } else {
+    // « Paroles : » sur une ligne sépare la description des paroles.
+    const [desc, lyrics] = prompt.split(/^\s*paroles\s*:\s*$/im);
+    prompt = desc.trim();
+    request.prompt = prompt;
+    if (lyrics?.trim() && spec.supports_lyrics) request.lyrics_prompt = lyrics.trim();
+    if (o.duration && (spec.duration_options || spec.max_duration)) request.duration_seconds = Number(o.duration);
+    if (o.instrumental && spec.supports_force_instrumental) request.force_instrumental = true;
+  }
+  let quote: number | undefined;
+  await runMediaJob(kind === "video" ? "Génération de la vidéo…" : "Génération de l'audio…", info?.name ?? model, model, async (requestId, msg) => {
+    if (!prompt && !request.image_url) throw new Error("Décrivez ce qu'il faut générer.");
+    const ref = await api.generateMedia(requestId, kind === "video" ? "video" : "audio", request, (p) => {
+      if (p.stage === "quote") quote = p.quote;
+      const cost = quote ? ` · ${fmtCost(quote)}` : "";
+      if (p.stage === "queued") setActivity(kind === "video" ? "Vidéo en file d'attente…" : "Audio en file d'attente…", `${info?.name ?? model}${cost}`);
+      if (p.stage === "processing") {
+        const eta = p.average ? ` sur ~${Math.round(p.average / 1000)} s` : "";
+        setActivity(kind === "video" ? "Génération de la vidéo…" : "Génération de l'audio…", `${Math.round((p.elapsed ?? 0) / 1000)} s${eta}${cost}`);
+      }
+    });
+    msg.media = { ...ref, kind: kind === "video" ? "video" : "audio" };
+    return `${kind === "video" ? "Vidéo générée" : "Audio généré"}${quote ? ` · ${fmtCost(quote)}` : ""}`;
+  });
+}
+
 const TRANSFORM_LABEL = {
   upscale2: "Agrandir ×2",
   upscale4: "Agrandir ×4",
@@ -732,10 +804,13 @@ el.input.addEventListener("keydown", (e) => {
   }
 });
 el.modelSelect.addEventListener("change", () => {
-  if (state.imageMode) state.selectedImageModel = el.modelSelect.value;
-  else state.selectedModel = el.modelSelect.value;
+  const v = el.modelSelect.value;
+  if (state.mediaMode === "image") state.selectedImageModel = v;
+  else if (state.mediaMode === "video") state.selectedVideoModel = v;
+  else if (state.mediaMode === "music") state.selectedMusicModel = v;
+  else state.selectedModel = v;
   renderChrome();
-  el.modelSelect.title = modelTitle((state.imageMode ? state.imageModels : state.models).find((m) => m.id === el.modelSelect.value));
+  el.modelSelect.title = modelTitle(modelsOf(state.mediaMode === "music" ? "music" : state.mediaMode === "video" ? "video" : state.imageMode ? "image" : "text").find((m) => m.id === v));
   renderUsage();
 });
 el.exportBtn.addEventListener("click", async () => {

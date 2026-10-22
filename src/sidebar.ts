@@ -248,14 +248,15 @@ export function newChat() {
     return;
   }
   // Le mode Image est conservé d'une conversation à l'autre.
-  const imageGen = state.mode === "chat" && !!(state.current ? state.current.imageGen : state.draft.imageGen);
+  // Le mode de création (image, vidéo, musique) est conservé d'une conversation à l'autre.
+  const media = state.mode === "chat" ? (state.mediaMode ?? "") : "";
   state.current = null;
   state.draft = {
     // Pas de dossier repris en silence : on le choisit explicitement (sauf projet avec dossier).
     workspace: state.mode === "code" ? projectWorkspace(state.projectFilter) : undefined,
     webSearch: state.settings.webSearchDefault,
     mcp: true,
-    imageGen,
+    media,
     promptId: state.settings.systemPrompts.some((p) => p.id === state.settings.defaultPrompt) ? state.settings.defaultPrompt : "",
     permissionMode: state.settings.defaultPermission ?? "auto",
     projectId: state.projectFilter || undefined,

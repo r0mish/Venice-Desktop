@@ -50,6 +50,13 @@ export interface Settings {
   transcriptionUrl: string;
   /** Termes à favoriser (un par ligne ou séparés par des virgules). */
   transcriptionVocabulary: string;
+  /** Transcription de fichiers : segments horodatés. */
+  transcriptionTimestamps: boolean;
+  /** Voix clonées (identifiant vv_…, nom, modèle associé). */
+  clonedVoices: { id: string; name: string; model: string }[];
+  /** Modèles vidéo et musique (vide = défaut de Venice). */
+  videoModel: string;
+  musicModel: string;
   ttsModel: string;
   ttsVoice: string;
   ttsSpeed: number;
@@ -101,6 +108,8 @@ export interface ModelInfo {
   /** Modèles vidéo, musique, voix : spécification brute. */
   spec?: Record<string, unknown>;
 }
+
+export type MediaMode = "image" | "video" | "music";
 
 export interface Character {
   slug: string;
@@ -203,6 +212,8 @@ export interface Message {
   /** Message utilisateur : versions (modifications, régénérations) et version affichée. */
   branches?: { content: string; images?: string[]; files?: TextFile[]; tail: Message[] }[];
   branch?: number;
+  /** Vidéo ou audio généré, enregistré localement. */
+  media?: { id: string; kind: "video" | "audio"; mime: string; size: number };
   /** Réponse d'un second modèle, affichée à côté (comparaison). */
   compare?: { model: string; content: string; reasoning?: string; usage?: Usage; error?: string };
 }
@@ -248,6 +259,8 @@ export interface Conversation {
   imageGen?: boolean;
   /** Second modèle qui répond aussi, pour comparer. */
   compareModel?: string;
+  /** Création : image, vidéo ou musique ("" = texte). Remplace imageGen. */
+  media?: MediaMode | "";
   compaction?: Compaction;
   /** Consommation hors messages (compactions), par modèle. */
   extraUsage?: Record<string, Usage>;
@@ -523,6 +536,21 @@ export const api = {
   transformImage: (requestId: string, request: { op: string; image: string; prompt: string; model: string }) =>
     invoke<string>("transform_image", { requestId, request }),
   listGallery: () => invoke<GalleryItem[]>("list_gallery"),
+  transcribeFile: (name: string, mime: string, dataBase64: string) => invoke<string>("transcribe_file", { name, mime, dataBase64 }),
+  cloneVoice: (name: string, mime: string, dataBase64: string, model: string) =>
+    invoke<string>("clone_voice", { name, mime, dataBase64, model }),
+  generateMedia(
+    requestId: string,
+    kind: "video" | "audio",
+    request: Record<string, unknown>,
+    onProgress: (p: { stage: "quote" | "queued" | "processing"; quote?: number; average?: number; elapsed?: number }) => void,
+  ): Promise<{ id: string; mime: string; size: number }> {
+    const channel = new Channel<{ stage: "quote" | "queued" | "processing"; quote?: number; average?: number; elapsed?: number }>();
+    channel.onmessage = onProgress;
+    return invoke("generate_media", { requestId, kind, request, onProgress: channel });
+  },
+  mediaRead: (id: string) => invoke<string>("media_read", { id }),
+  mediaExport: (id: string, name: string, ext: string) => invoke<boolean>("media_export", { id, name, ext }),
   balance: () => invoke<Balance>("account_balance"),
   listCharacters: (search: string) => invoke<Character[]>("list_characters", { search }),
 

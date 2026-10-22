@@ -868,3 +868,15 @@ table.usage th { color: var(--muted); font-weight: 500; }
 .cmp-col { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elev); }
 .cmp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
 @media (max-width: 900px) { .compare-grid { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- vidéo, musique, voix */
+.media-opts { display: inline-flex; gap: 6px; align-items: center; }
+.gen-media { display: grid; gap: 6px; margin: 4px 0 6px; max-width: 640px; }
+.gen-media video { width: 100%; max-height: 420px; border-radius: 12px; background: #000; }
+.gen-media audio { width: 100%; }
+.gen-media.loading { color: var(--muted); font-size: 13px; }
+.gen-media .row { display: flex; align-items: center; gap: 10px; }
+.gen-media .btn-ghost svg { width: 14px; height: 14px; }
+.voice-btn.on { color: #fff; background: var(--accent); }
+.voice-btn[data-phase="listening"] { animation: pulse-ring 1.4s ease-out infinite; }
+@keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }

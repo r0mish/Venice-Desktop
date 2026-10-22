@@ -109,7 +109,7 @@ export const setValue = (d, css, value, event = "change") =>
     (sel, v, ev) => {
       const e = document.querySelector(sel);
       e.value = v;
-      e.dispatchEvent(new Event(ev));
+      e.dispatchEvent(new Event(ev, { bubbles: true }));
     },
     css,
     value,

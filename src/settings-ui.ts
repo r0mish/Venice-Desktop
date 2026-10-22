@@ -41,6 +41,12 @@ const s = {
   ttsVoice: $<HTMLInputElement>("#s-tts-voice"),
   ttsSpeed: $<HTMLInputElement>("#s-tts-speed"),
   balance: $("#balance"),
+  videoModel: $<HTMLSelectElement>("#s-video-model"),
+  musicModel: $<HTMLSelectElement>("#s-music-model"),
+  sttTimestamps: $<HTMLInputElement>("#s-stt-timestamps"),
+  clonedVoices: $("#s-cloned-voices"),
+  cloneStatus: $("#s-clone-status"),
+  cloneFile: $<HTMLInputElement>("#s-clone-file"),
   balanceAlert: $<HTMLInputElement>("#s-balance-alert"),
   budget: $<HTMLInputElement>("#s-budget"),
   timeout: $<HTMLInputElement>("#s-timeout"),
@@ -289,6 +295,75 @@ s.wsList.addEventListener("click", async (e) => {
   renderWsList();
 });
 
+// ---------------------------------------------------------------- voix clonées
+
+function renderClonedVoices() {
+  const voices = state.settings.clonedVoices ?? [];
+  s.clonedVoices.innerHTML = voices
+    .map(
+      (v, i) => `<div class="ws-row"><span><strong>${escapeHtml(v.name)}</strong> <code>${escapeHtml(v.id)}</code> <span class="muted small">${escapeHtml(v.model)}</span></span>
+        <span class="row"><button type="button" class="btn-ghost sm" data-use-voice="${i}">Utiliser</button><button type="button" class="btn-ghost sm danger" data-rm-voice="${i}">Retirer</button></span></div>`,
+    )
+    .join("");
+  const list = $<HTMLDataListElement>("#tts-voices");
+  list.querySelectorAll("[data-cloned]").forEach((o) => o.remove());
+  for (const v of voices) list.insertAdjacentHTML("beforeend", `<option data-cloned value="${escapeHtml(v.id)}">${escapeHtml(v.name)} (voix clonée)</option>`);
+}
+
+s.clonedVoices.addEventListener("click", (e) => {
+  const t = e.target as HTMLElement;
+  const voices = state.settings.clonedVoices ?? [];
+  const use = t.dataset.useVoice;
+  const rm = t.dataset.rmVoice;
+  if (use !== undefined) {
+    const v = voices[Number(use)];
+    s.ttsVoice.value = v.id;
+    s.ttsModel.value = v.model;
+  } else if (rm !== undefined) {
+    state.settings.clonedVoices = voices.filter((_, i) => i !== Number(rm));
+    api.saveSettings(state.settings).catch((err) => toast(errMsg(err), true));
+    renderClonedVoices();
+  }
+});
+
+$("#s-clone-voice").addEventListener("click", () => {
+  const name = $<HTMLInputElement>("#s-clone-name");
+  if (!name.value.trim()) {
+    name.focus();
+    return toast("Donnez d'abord un nom à la voix.", true);
+  }
+  s.cloneFile.click();
+});
+s.cloneFile.addEventListener("change", async () => {
+  const file = s.cloneFile.files?.[0];
+  s.cloneFile.value = "";
+  if (!file) return;
+  if (file.size > 20 * 1024 * 1024) return toast("Échantillon trop volumineux (20 Mo max)", true);
+  const nameInput = $<HTMLInputElement>("#s-clone-name");
+  const name = nameInput.value.trim() || file.name.replace(/\.[^.]+$/, "");
+  s.cloneStatus.textContent = "Clonage en cours…";
+  try {
+    const b64 = await new Promise<string>((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res((r.result as string).split(",")[1] ?? "");
+      r.onerror = () => rej(r.error);
+      r.readAsDataURL(file);
+    });
+    const model = "tts-chatterbox-hd";
+    const id = await api.cloneVoice(file.name, file.type || "audio/mpeg", b64, model);
+    state.settings.clonedVoices = [...(state.settings.clonedVoices ?? []), { id, name, model }];
+    await api.saveSettings(state.settings);
+    s.ttsVoice.value = id;
+    s.ttsModel.value = model;
+    s.cloneStatus.textContent = `✓ Voix « ${name} » créée et sélectionnée.`;
+    nameInput.value = "";
+    renderClonedVoices();
+  } catch (e) {
+    s.cloneStatus.textContent = "";
+    toast(`Clonage impossible : ${errMsg(e)}`, true);
+  }
+});
+
 function renderWebProvider() {
   s.searxWrap.hidden = s.webProvider.value !== "searxng";
   s.webModeWrap.hidden = s.webProvider.value !== "venice";
@@ -373,6 +448,11 @@ export async function openSettings(tab = "general") {
   fillModelSelect(s.codeModel, st.codeModel, { auto: true });
   fillModelSelect(s.imageModel, st.imageModel, { auto: true, kind: "image" });
   fillModelSelect(s.imageEditModel, st.imageEditModel ?? "", { auto: true, kind: "edit" });
+  fillModelSelect(s.videoModel, st.videoModel ?? "", { auto: true, kind: "video" });
+  fillModelSelect(s.musicModel, st.musicModel ?? "", { auto: true, kind: "music" });
+  s.sttTimestamps.checked = !!st.transcriptionTimestamps;
+  s.cloneStatus.textContent = "";
+  renderClonedVoices();
   s.imageVariants.value = String(st.imageVariants || 1);
   promptEditor.set(st.systemPrompts ?? [], st.defaultPrompt ?? "");
   templateEditor.set(st.promptTemplates ?? []);
@@ -484,6 +564,9 @@ $("#settings-form").addEventListener("submit", async (e) => {
     imageSafeMode: s.imageSafe.checked,
     imageHideWatermark: s.imageWatermark.checked,
     imageEditModel: s.imageEditModel.value,
+    videoModel: s.videoModel.value,
+    musicModel: s.musicModel.value,
+    transcriptionTimestamps: s.sttTimestamps.checked,
     imageVariants: Number(s.imageVariants.value) || 1,
     ttsModel: s.ttsModel.value.trim() || "tts-kokoro",
     ttsVoice: s.ttsVoice.value.trim(),
@@ -534,6 +617,8 @@ $("#settings-form").addEventListener("submit", async (e) => {
       state.draft.promptId = next.defaultPrompt;
     }
     if (next.imageModel !== prev.imageModel) state.selectedImageModel = next.imageModel || autoModel("image");
+    if (next.videoModel !== prev.videoModel) state.selectedVideoModel = next.videoModel || autoModel("video");
+    if (next.musicModel !== prev.musicModel) state.selectedMusicModel = next.musicModel || autoModel("music");
     el.settings.close();
     if (baseChanged) await loadModels();
     else fillTopModelSelect();

@@ -5,6 +5,8 @@ import { createServer } from "node:http";
 
 /** Requêtes reçues, pour les vérifications des tests. */
 export const requests = [];
+/** Générations vidéo/audio en cours : nombre de consultations par modèle. */
+const jobs = new Map();
 
 const MODELS = [
   { id: "zai-org-glm-5-1", name: "GLM 5.1", traits: ["default"], privacy: "private", vision: false, code: false },
@@ -137,7 +139,19 @@ export function startMock(port = 0) {
         if (url.searchParams.get("type") === "inpaint") {
           return json(200, { object: "list", data: [{ id: "edit-e2e", type: "inpaint", model_spec: { name: "Retouche E2E", privacy: "private", traits: ["default"] } }] });
         }
-        if (["video", "music", "tts", "embedding"].includes(url.searchParams.get("type"))) return json(200, { object: "list", data: [] });
+        if (url.searchParams.get("type") === "video") {
+          return json(200, {
+            object: "list",
+            data: [{ id: "video-e2e", type: "video", model_spec: { name: "Vidéo E2E", privacy: "private", traits: ["default"], constraints: { durations: ["5s", "10s"], aspect_ratios: ["16:9", "9:16"], resolutions: ["720p"], model_type: "text-to-video", audio: true, audio_configurable: true } } }],
+          });
+        }
+        if (url.searchParams.get("type") === "music") {
+          return json(200, {
+            object: "list",
+            data: [{ id: "music-e2e", type: "music", model_spec: { name: "Musique E2E", privacy: "private", traits: ["default"], duration_options: [30, 60], default_duration: 30, supports_force_instrumental: true, supports_lyrics: true } }],
+          });
+        }
+        if (["tts", "embedding"].includes(url.searchParams.get("type"))) return json(200, { object: "list", data: [] });
         if (url.searchParams.get("type") === "image") {
           return json(200, {
             object: "list",
@@ -184,7 +198,28 @@ export function startMock(port = 0) {
         return chat(parsed, res);
       }
       if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
-        return json(200, { text: "Dictée simulée" });
+        requests.push({ path: url.pathname, size: body.length, timestamps: body.includes('name="timestamps"') });
+        return json(200, body.includes("memo-e2e") ? { text: "Transcription simulée du mémo" } : { text: "Dictée simulée" });
+      }
+      if (req.method === "POST" && url.pathname === "/v1/audio/voices") {
+        requests.push({ path: url.pathname, model: body.match(/name="model"\r\n\r\n([^\r]+)/)?.[1] });
+        return json(200, { id: "vv_e2e123", model: "tts-chatterbox-hd" });
+      }
+      if (req.method === "POST" && /^\/v1\/(video|audio)\/quote$/.test(url.pathname)) return json(200, { quote: 0.25 });
+      if (req.method === "POST" && /^\/v1\/(video|audio)\/queue$/.test(url.pathname)) {
+        const parsed = JSON.parse(body);
+        requests.push({ path: url.pathname, ...parsed });
+        jobs.set(parsed.model, 0);
+        return json(200, { model: parsed.model, queue_id: `q-${parsed.model}` });
+      }
+      if (req.method === "POST" && /^\/v1\/(video|audio)\/retrieve$/.test(url.pathname)) {
+        const parsed = JSON.parse(body);
+        const polls = (jobs.get(parsed.model) ?? 0) + 1;
+        jobs.set(parsed.model, polls);
+        if (polls < 2) return json(200, { status: "PROCESSING", average_execution_time: 20000, execution_duration: 4000 });
+        const video = url.pathname.startsWith("/v1/video");
+        res.writeHead(200, { "Content-Type": video ? "video/mp4" : "audio/mpeg" });
+        return res.end(Buffer.alloc(2048, video ? 1 : 2));
       }
       json(404, { error: `inconnu : ${req.method} ${req.url}` });
     });

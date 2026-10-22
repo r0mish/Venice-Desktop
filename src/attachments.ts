@@ -7,6 +7,8 @@ import { icons, toast } from "./ui";
 const MAX_TEXT_FILE = 512 * 1024;
 const MAX_PDF = 50 * 1024 * 1024;
 const MAX_IMAGE_SIDE = 2048;
+const MAX_MEDIA = 200 * 1024 * 1024;
+const MEDIA_RE = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac|webm|mp4|mov|mkv)$/i;
 
 // ---------------------------------------------------------------- pièces jointes
 
@@ -71,6 +73,26 @@ async function addPdf(file: File) {
   }
 }
 
+/** Fichier audio ou vidéo : transcrit, puis joint comme texte (réunion, podcast, mémo…). */
+async function addMedia(file: File) {
+  if (file.size > MAX_MEDIA) throw new Error(`trop volumineux (max ${MAX_MEDIA / 1048576} Mo)`);
+  const placeholder: TextFile = { name: `${file.name} (transcription…)`, text: "" };
+  state.pending.files.push(placeholder);
+  renderAttachments();
+  try {
+    const b64 = (await readAsDataUrl(file)).split(",")[1];
+    const text = await api.transcribeFile(file.name, file.type || "application/octet-stream", b64);
+    if (!text.trim()) throw new Error("rien n'a été reconnu");
+    placeholder.name = `${file.name} (transcription)`;
+    placeholder.text = text;
+  } catch (e) {
+    state.pending.files.splice(state.pending.files.indexOf(placeholder), 1);
+    throw e;
+  } finally {
+    renderAttachments();
+  }
+}
+
 async function addFiles(list: Iterable<File>) {
   for (const file of list) {
     try {
@@ -83,13 +105,17 @@ async function addFiles(list: Iterable<File>) {
         await addPdf(file);
         continue;
       }
+      if (/^(audio|video)\//.test(file.type) || MEDIA_RE.test(file.name)) {
+        await addMedia(file);
+        continue;
+      }
       if (file.size > MAX_TEXT_FILE) {
         toast(`${file.name} : trop volumineux (max ${MAX_TEXT_FILE / 1024} Ko)`, true);
         continue;
       }
       const buf = new Uint8Array(await file.arrayBuffer());
       if (buf.subarray(0, 8000).includes(0)) {
-        toast(`${file.name} : format non pris en charge (images, PDF et fichiers texte uniquement)`, true);
+        toast(`${file.name} : format non pris en charge (images, PDF, audio, vidéo et fichiers texte)`, true);
         continue;
       }
       state.pending.files.push({ name: file.name, text: new TextDecoder().decode(buf) });

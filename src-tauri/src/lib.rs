@@ -397,11 +397,11 @@ async fn dictation_stop(app: AppHandle, dictation: State<'_, Dictation>, transcr
     // Vocabulaire : invite initiale de Whisper (ignorée par les modèles qui ne la gèrent pas).
     let vocab = settings.vocabulary();
     let prompt = if vocab.is_empty() || (custom.is_empty() && !model.contains("whisper")) { String::new() } else { vocab.join(", ") };
-    match venice::transcribe(base, &key, model, lang, &prompt, captured.wav.clone()).await {
+    match venice::transcribe(base, &key, model, lang, &prompt, venice::AudioFile::wav(captured.wav.clone()), false).await {
         Ok(text) => Ok(Some(Transcript { text, note: None })),
         // Modèle refusé (retiré, nom changé…) : repli sur Whisper.
         Err(e) if custom.is_empty() && model != venice::TRANSCRIBE_FALLBACK && venice::is_model_error(&e) => {
-            let text = venice::transcribe(base, &key, venice::TRANSCRIBE_FALLBACK, lang, &vocab.join(", "), captured.wav).await?;
+            let text = venice::transcribe(base, &key, venice::TRANSCRIBE_FALLBACK, lang, &vocab.join(", "), venice::AudioFile::wav(captured.wav), false).await?;
             Ok(Some(Transcript { text, note: Some(format!("Modèle {model} indisponible ({e}) : transcription faite avec {}.", venice::TRANSCRIBE_FALLBACK)) }))
         }
         Err(e) => Err(e),
@@ -699,6 +699,106 @@ async fn speak(app: AppHandle, text: String) -> CmdResult<String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(audio))
 }
 
+/// Transcription d'un fichier audio ou vidéo joint (réunion, podcast…).
+#[tauri::command]
+async fn transcribe_file(app: AppHandle, name: String, mime: String, data_base64: String) -> CmdResult<String> {
+    let settings = storage::load_settings(&app)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data_base64.as_bytes()).map_err(|e| format!("Fichier illisible : {e}"))?;
+    let custom = settings.transcription_url.trim();
+    let (base, key) = if custom.is_empty() { (settings.base_url.as_str(), api_key()?) } else { (custom, String::new()) };
+    let model = if settings.transcription_model.trim().is_empty() { venice::TRANSCRIBE_MODEL } else { settings.transcription_model.trim() };
+    let mime = if mime.is_empty() { "application/octet-stream".to_string() } else { mime };
+    let file = venice::AudioFile { bytes, name, mime };
+    venice::transcribe(base, &key, model, settings.transcription_language.trim(), "", file, settings.transcription_timestamps).await
+}
+
+/// Clone une voix (échantillon audio) pour la lecture à voix haute.
+#[tauri::command]
+async fn clone_voice(app: AppHandle, name: String, mime: String, data_base64: String, model: String) -> CmdResult<String> {
+    let settings = storage::load_settings(&app)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data_base64.as_bytes()).map_err(|e| format!("Fichier illisible : {e}"))?;
+    venice::clone_voice(&settings.base_url, &api_key()?, &model, venice::AudioFile { bytes, name, mime }).await
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaRef {
+    id: String,
+    mime: String,
+    size: usize,
+}
+
+/// Vidéo ou musique : estimation du prix, mise en file, puis suivi jusqu'au résultat, enregistré
+/// localement (chiffré si le chiffrement est actif). `on_progress` reçoit les étapes.
+#[tauri::command]
+async fn generate_media(
+    app: AppHandle,
+    streams: State<'_, Streams>,
+    request_id: String,
+    kind: String,
+    request: serde_json::Value,
+    on_progress: Channel<serde_json::Value>,
+) -> CmdResult<MediaRef> {
+    let settings = storage::load_settings(&app)?;
+    let key = api_key()?;
+    let base = settings.base_url.as_str();
+    let kind = if kind == "video" { venice::JobKind::Video } else { venice::JobKind::Audio };
+    let model = request["model"].as_str().ok_or("Modèle manquant")?.to_owned();
+    let cancel = Arc::new(Notify::new());
+    streams.0.lock().unwrap().insert(request_id.clone(), cancel.clone());
+    let result = async {
+        if let Some(q) = venice::quote(base, &key, kind, &request).await {
+            let _ = on_progress.send(serde_json::json!({ "stage": "quote", "quote": q }));
+        }
+        let queue_id = venice::queue(base, &key, kind, &request).await?;
+        let _ = on_progress.send(serde_json::json!({ "stage": "queued" }));
+        let started = std::time::Instant::now();
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(4)) => {}
+                _ = cancel.notified() => return Err("Annulé (la génération peut se terminer chez Venice et être facturée)".to_string()),
+            }
+            if started.elapsed() > std::time::Duration::from_secs(45 * 60) {
+                return Err("Délai dépassé (45 min)".into());
+            }
+            match venice::retrieve(base, &key, kind, &model, &queue_id).await? {
+                venice::Poll::Processing { average, elapsed } => {
+                    let _ = on_progress.send(serde_json::json!({ "stage": "processing", "average": average, "elapsed": elapsed }));
+                }
+                venice::Poll::Done { bytes, mime } => {
+                    let size = bytes.len();
+                    let id = storage::save_media(&app, &bytes)?;
+                    return Ok(MediaRef { id, mime, size });
+                }
+            }
+        }
+    }
+    .await;
+    streams.0.lock().unwrap().remove(&request_id);
+    result
+}
+
+/// Contenu d'un média enregistré (base64), pour la lecture dans l'application.
+#[tauri::command]
+async fn media_read(app: AppHandle, id: String) -> CmdResult<String> {
+    let bytes = tauri::async_runtime::spawn_blocking(move || storage::read_media(&app, &id)).await.map_err(|e| e.to_string())??;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// Enregistre un média (déchiffré) via la boîte « Enregistrer sous ».
+#[tauri::command]
+async fn media_export(app: AppHandle, id: String, name: String, ext: String) -> CmdResult<bool> {
+    let bytes = storage::read_media(&app, &id)?;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let ext: String = ext.chars().filter(char::is_ascii_alphanumeric).take(5).collect();
+    app.dialog().file().add_filter("Média", &[ext.as_str()]).set_file_name(format!("{name}.{ext}")).save_file(move |p| {
+        let _ = tx.send(p);
+    });
+    let Some(path) = rx.await.map_err(|e| e.to_string())? else { return Ok(false) };
+    std::fs::write(path.into_path().map_err(|e| e.to_string())?, bytes).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 #[tauri::command]
 async fn list_characters(app: AppHandle, search: String) -> CmdResult<Vec<venice::Character>> {
     let settings = storage::load_settings(&app)?;
@@ -883,6 +983,11 @@ pub fn run() {
             speak,
             account_balance,
             list_characters,
+            transcribe_file,
+            clone_voice,
+            generate_media,
+            media_read,
+            media_export,
             transform_image,
             list_gallery,
             mcp_get_config,

@@ -110,6 +110,13 @@
                 <option value="4">×4</option>
               </select>
               <button type="button" id="seed-chip" class="toggle on" title="Graine réutilisée pour les prochaines images (cliquer pour revenir au hasard)" hidden></button>
+              <button type="button" id="vid-toggle" class="toggle" title="Génération de vidéos" hidden>
+                <svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2" /><path d="m16 10 5-3v10l-5-3z" /></svg>Vidéo
+              </button>
+              <button type="button" id="music-toggle" class="toggle" title="Génération de musique et de sons" hidden>
+                <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>Musique
+              </button>
+              <span id="media-opts" class="media-opts" hidden></span>
               <button type="button" id="sys-toggle" class="toggle sys-toggle" hidden title="Accès système : autoriser l'agent à lire et modifier des fichiers en dehors du dossier de projet (ex. /etc). Chaque modification hors projet demande votre approbation.">
                 <svg viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z" /><path d="M9 12h6" /></svg><span>Système</span>
               </button>
@@ -120,6 +127,9 @@
               <span id="dictation" hidden><span class="rec-dot"></span><span class="rec-level"><i></i></span><span id="dictation-time">0:00</span></span>
               <span id="usage-info" hidden></span>
               <button type="button" id="ctx-meter" class="ctx-meter" hidden></button>
+              <button type="button" id="voice-btn" class="icon-btn voice-btn" title="Conversation vocale">
+                <svg viewBox="0 0 24 24"><path d="M3 14v-2a9 9 0 0 1 18 0v2" /><rect x="2" y="14" width="5" height="7" rx="2" /><rect x="17" y="14" width="5" height="7" rx="2" /></svg>
+              </button>
               <button type="button" id="mic-btn" class="icon-btn mic-btn" title="Dictée vocale (Ctrl+Maj+D)">
                 <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg>
               </button>
@@ -330,6 +340,14 @@
             <p class="muted small">Bouton « Image » de la zone de saisie (onglet Chat). Les images sont stockées dans la conversation, sur cet appareil (chiffrées si le chiffrement est actif).</p>
           </fieldset>
           <fieldset>
+            <legend>Vidéo et musique</legend>
+            <div class="grid2">
+              <label>Modèle vidéo <select id="s-video-model"></select></label>
+              <label>Modèle de musique et de sons <select id="s-music-model"></select></label>
+            </div>
+            <p class="muted small">Boutons « Vidéo » et « Musique » de la zone de saisie. Le prix estimé s'affiche avant la génération ; le résultat est supprimé des serveurs de Venice dès qu'il est récupéré, puis stocké sur cet appareil (chiffré si le chiffrement est actif).</p>
+          </fieldset>
+          <fieldset>
             <legend>Dictée vocale</legend>
             <div class="grid2">
               <label>Modèle de transcription
@@ -357,6 +375,7 @@
             <label>Vocabulaire à reconnaître (Whisper ou serveur personnalisé)
               <textarea id="s-stt-vocab" rows="2" placeholder="Ex. : Proxmox, fail2ban, ZFS, Nextcloud" spellcheck="false"></textarea>
             </label>
+            <label class="check"><input id="s-stt-timestamps" type="checkbox" /> Horodater les transcriptions de fichiers audio et vidéo joints ([mm:ss])</label>
             <label>Serveur de transcription (facultatif)
               <input id="s-stt-url" type="url" placeholder="vide = API Venice ; ex. http://localhost:8000/v1" spellcheck="false" />
             </label>
@@ -386,6 +405,14 @@
               </label>
             </div>
             <label>Vitesse <input id="s-tts-speed" type="number" min="0.5" max="2" step="0.1" /></label>
+            <div class="row">
+              <input id="s-clone-name" placeholder="Nom de la voix à cloner" spellcheck="false" />
+              <button type="button" class="btn-ghost sm" id="s-clone-voice">Choisir l'échantillon…</button>
+              <span class="muted small" id="s-clone-status"></span>
+            </div>
+            <div id="s-cloned-voices"></div>
+            <input type="file" id="s-clone-file" accept="audio/*,.mp3,.wav,.flac,.m4a" hidden />
+            <p class="muted small">Clonage : un échantillon de 10 à 30 s d'une voix claire, <strong>avec l'accord de la personne</strong>. L'échantillon est envoyé à Venice et à son fournisseur (Resemble AI).</p>
             <p class="muted small">Bouton haut-parleur sous chaque réponse. Les voix dépendent du modèle. L'audio est lu en mémoire, jamais enregistré.</p>
           </fieldset>
           <fieldset>

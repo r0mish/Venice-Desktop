@@ -7,7 +7,7 @@ import { findProject, openProjectDialog, projectChars } from "./projects-ui";
 import { el, FULL_PROJECT_CHARS, opts, state } from "./state";
 import { autoGrow, copy, fillTopModelSelect, icons, isVenice, toast } from "./ui";
 import { chooseWorkspace, renderChrome, selectWorkspace } from "./chrome";
-import { runAgent, runImage, runTransform, runTurn, saveCurrent } from "./run";
+import { runAgent, runImage, runQueued, runTransform, runTurn, saveCurrent } from "./run";
 import { fork, switchBranch } from "./branches";
 import { initSpeech, speak, speakingId } from "./speech";
 import { openLightbox } from "./lightbox";
@@ -59,7 +59,11 @@ export function renderWelcome() {
   const p = findProject(state.draft.projectId);
   el.messages.innerHTML = p
     ? `<div class="welcome"><h2>${escapeHtml(p.name)}</h2><p>Nouvelle conversation dans ce projet.</p>${projectBanner()}</div>`
-    : state.imageMode
+    : state.mediaMode === "video"
+      ? `<div class="welcome"><h2>Génération de vidéos</h2><p>Décrivez la scène, le mouvement et le style ; joignez une image pour l'animer.</p></div>`
+      : state.mediaMode === "music"
+        ? `<div class="welcome"><h2>Musique et sons</h2><p>Décrivez le style, l'ambiance, les instruments. Pour une chanson, ajoutez une ligne « Paroles : » suivie des paroles.</p></div>`
+        : state.imageMode
       ? `<div class="welcome"><h2>Génération d'images</h2><p>Décrivez l'image souhaitée : sujet, style, cadrage, lumière…</p></div>`
       : `<div class="welcome"><h2>${greet} 👋</h2><p>Comment puis-je vous aider ?</p></div>`;
 }
@@ -127,17 +131,17 @@ function messageHtml(m: Message, next: Message | undefined): string {
   const endOfTurn = !next || next.role === "user";
   // Pendant l'exécution, le dernier message n'a pas encore d'actions (copier, régénérer…).
   const speaking = speakingId() === m.id;
-  const canSpeak = isVenice() && !m.generated?.length;
+  const canSpeak = isVenice() && !m.generated?.length && !m.media && !!m.content.trim();
   const actions = streaming || !endOfTurn || (state.busy && !next)
     ? ""
     : `<div class="msg-actions">
-        ${m.generated?.length ? "" : `<button class="icon-btn sm" data-act="copy" title="Copier">${icons.copy}</button>`}
+        ${m.generated?.length || m.media ? "" : `<button class="icon-btn sm" data-act="copy" title="Copier">${icons.copy}</button>`}
         ${canSpeak ? `<button class="icon-btn sm${speaking ? " on" : ""}" data-act="speak" title="${speaking ? "Arrêter la lecture" : "Lire à voix haute"}">${speaking ? icons.stop : icons.speaker}</button>` : ""}
         ${m.seed != null ? `<button class="icon-btn sm" data-act="seed" title="Réutiliser la graine ${m.seed} pour les prochaines images (variations proches)">${icons.seed}</button>` : ""}
-        ${!next && !isImageOp(m) ? `<button class="icon-btn sm" data-act="retry" title="${m.generated?.length ? "Générer une autre image" : "Régénérer"}">${icons.retry}</button>` : ""}
+        ${!next && !isImageOp(m) ? `<button class="icon-btn sm" data-act="retry" title="${m.generated?.length ? "Générer une autre image" : m.media ? "Générer à nouveau" : "Régénérer"}">${icons.retry}</button>` : ""}
         <span class="meta">${escapeHtml(meta)}</span>
       </div>`;
-  const main = `${reasoning}${body ? `<div class="md">${body}</div>` : ""}${generated ? `<div class="gen-images">${generated}</div>` : ""}${sourcesHtml(m.citations)}${tools ? `<div class="tools">${tools}</div>` : ""}${error}`;
+  const main = `${reasoning}${body ? `<div class="md">${body}</div>` : ""}${generated ? `<div class="gen-images">${generated}</div>` : ""}${m.media ? mediaHtml(m) : ""}${sourcesHtml(m.citations)}${tools ? `<div class="tools">${tools}</div>` : ""}${error}`;
   return `<div class="msg assistant${streaming ? " streaming" : ""}" data-id="${m.id}">
     ${m.compare ? compareHtml(m, main, streaming) : main}${actions}
   </div>`;
@@ -170,6 +174,44 @@ function sourcesHtml(citations?: Citation[]): string {
     .join("");
   return `<details class="sources"><summary>${citations.length} source${citations.length > 1 ? "s" : ""} web</summary><ol>${items}</ol></details>`;
 }
+
+// ---------------------------------------------------------------- vidéos et sons générés
+
+/** URL locales (blob) des médias déjà chargés. */
+const mediaUrls = new Map<string, string>();
+const mediaLoading = new Set<string>();
+
+function mediaHtml(m: Message): string {
+  const media = m.media!;
+  const url = mediaUrls.get(media.id);
+  if (!url) {
+    loadMedia(m);
+    return `<div class="gen-media loading">Chargement du média…</div>`;
+  }
+  const player = media.kind === "video" ? `<video controls preload="metadata" src="${url}"></video>` : `<audio controls preload="metadata" src="${url}"></audio>`;
+  const mb = (media.size / 1048576).toLocaleString("fr-FR", { maximumFractionDigits: 1 });
+  return `<div class="gen-media ${media.kind}">${player}<div class="row"><button class="btn-ghost sm" data-act="media-save">${icons.download} Enregistrer</button><span class="muted small">${mb} Mo · stocké sur cet appareil</span></div></div>`;
+}
+
+/** Lit le média (déchiffré par Rust) et l'expose à la WebView sous forme d'URL blob. */
+async function loadMedia(m: Message) {
+  const id = m.media!.id;
+  if (mediaLoading.has(id)) return;
+  mediaLoading.add(id);
+  try {
+    const bin = atob(await api.mediaRead(id));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    mediaUrls.set(id, URL.createObjectURL(new Blob([bytes], { type: m.media!.mime })));
+    rerenderMessage(m);
+  } catch (e) {
+    toast(`Média illisible : ${e instanceof Error ? e.message : String(e)}`, true);
+  } finally {
+    mediaLoading.delete(id);
+  }
+}
+
+const mediaExt = (mime: string) => (mime.includes("mp4") ? "mp4" : mime.includes("webm") ? "webm" : mime.includes("wav") ? "wav" : mime.includes("flac") ? "flac" : mime.includes("mpeg") || mime.includes("mp3") ? "mp3" : "bin");
 
 /** Deux réponses côte à côte : modèle principal et modèle comparé. */
 function compareHtml(m: Message, main: string, streaming: boolean): string {
@@ -331,6 +373,14 @@ el.messages.addEventListener("click", async (ev) => {
       rerenderMessage(msg, true);
       return saveCurrent();
     }
+    case "media-save":
+      if (!msg.media) return;
+      try {
+        if (await api.mediaExport(msg.media.id, imageName(msg), mediaExt(msg.media.mime))) toast("Média enregistré");
+      } catch (e) {
+        toast(String(e), true);
+      }
+      return;
     case "branch-prev":
     case "branch-next": {
       if (state.busy) return;
@@ -342,7 +392,7 @@ el.messages.addEventListener("click", async (ev) => {
     case "seed":
       state.lockedSeed = msg.seed ?? null;
       if (!state.imageMode && state.current) {
-        state.current.imageGen = true;
+        state.current.media = "image";
         fillTopModelSelect();
       }
       renderChrome();
@@ -418,7 +468,7 @@ async function regenerate(msg: Message) {
   fork(state.current, idx);
   state.current.messages = state.current.messages.slice(0, idx + 1);
   renderConversation();
-  await (msg.generated?.length ? runImage() : runAgent());
+  await (msg.generated?.length ? runImage() : msg.media ? runQueued(msg.media.kind === "video" ? "video" : "music") : runAgent());
 }
 
 // Bouton lecture/arrêt à jour quand la lecture commence ou se termine.
