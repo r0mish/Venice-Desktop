@@ -143,7 +143,7 @@ export function toApiMessages(conv: Conversation, system: string): ApiMessage[] 
         content = `${pendingSummary}\n\n---\n\n${content}`;
         pendingSummary = "";
       }
-      out.push({ role: "user", content, images: m.images ?? [] });
+      out.push({ role: "user", content, images: m.imageOp ? [] : (m.images ?? []) });
       continue;
     }
     const calls = m.toolCalls ?? [];

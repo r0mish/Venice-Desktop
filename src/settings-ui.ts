@@ -35,6 +35,8 @@ const s = {
   imageNegative: $<HTMLInputElement>("#s-image-negative"),
   imageSafe: $<HTMLInputElement>("#s-image-safe"),
   imageWatermark: $<HTMLInputElement>("#s-image-watermark"),
+  imageEditModel: $<HTMLSelectElement>("#s-image-edit-model"),
+  imageVariants: $<HTMLSelectElement>("#s-image-variants"),
   ttsModel: $<HTMLInputElement>("#s-tts-model"),
   ttsVoice: $<HTMLInputElement>("#s-tts-voice"),
   ttsSpeed: $<HTMLInputElement>("#s-tts-speed"),
@@ -370,6 +372,8 @@ export async function openSettings(tab = "general") {
   fillModelSelect(s.model, st.defaultModel, { auto: true });
   fillModelSelect(s.codeModel, st.codeModel, { auto: true });
   fillModelSelect(s.imageModel, st.imageModel, { auto: true, kind: "image" });
+  fillModelSelect(s.imageEditModel, st.imageEditModel ?? "", { auto: true, kind: "edit" });
+  s.imageVariants.value = String(st.imageVariants || 1);
   promptEditor.set(st.systemPrompts ?? [], st.defaultPrompt ?? "");
   templateEditor.set(st.promptTemplates ?? []);
   s.balanceAlert.value = st.balanceAlert?.toString() ?? "";
@@ -479,6 +483,8 @@ $("#settings-form").addEventListener("submit", async (e) => {
     imageNegativePrompt: s.imageNegative.value.trim(),
     imageSafeMode: s.imageSafe.checked,
     imageHideWatermark: s.imageWatermark.checked,
+    imageEditModel: s.imageEditModel.value,
+    imageVariants: Number(s.imageVariants.value) || 1,
     ttsModel: s.ttsModel.value.trim() || "tts-kokoro",
     ttsVoice: s.ttsVoice.value.trim(),
     ttsSpeed: Math.min(2, Math.max(0.5, Number(s.ttsSpeed.value) || 1)),

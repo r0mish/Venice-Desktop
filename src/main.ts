@@ -10,16 +10,18 @@ import { cancelDictation, initDictation, toggleDictation } from "./dictation";
 import { $, el, errMsg, opts, state } from "./state";
 import { applyTheme, loadModels, toast } from "./ui";
 import { newChat, onProjectChange, refreshConvs, setMode } from "./sidebar";
-import { openRemoteWorkspace, toggleWsMenu } from "./chrome";
+import { openRemoteWorkspace, renderChrome, toggleWsMenu } from "./chrome";
 import { renderUsage, stop } from "./run";
 import { openSettings, pollMcp, refreshKeyStatus } from "./settings-ui";
 import { initUpdates } from "./updates-ui";
 import { initLightbox } from "./lightbox";
 import { initTemplates } from "./templates-ui";
 import { checkBudget } from "./budget";
+import { openGallery } from "./gallery-ui";
 import "./attachments";
 
 $("#open-settings").addEventListener("click", () => openSettings());
+$("#open-gallery").addEventListener("click", () => openGallery());
 $("#new-chat").addEventListener("click", newChat);
 $("#toggle-sidebar").addEventListener("click", () => el.app.classList.toggle("sidebar-hidden"));
 
@@ -114,7 +116,8 @@ async function init() {
   pollMcp();
   el.input.focus();
   await loadModels();
-  renderUsage();
+  // Bascules qui dépendent des modèles disponibles (Image, Réflexion…).
+  renderChrome();
   checkBudget(true);
   await initUpdates();
 }

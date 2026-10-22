@@ -134,6 +134,10 @@ export function startMock(port = 0) {
       };
       const url = new URL(req.url, "http://localhost");
       if (req.method === "GET" && url.pathname === "/v1/models") {
+        if (url.searchParams.get("type") === "inpaint") {
+          return json(200, { object: "list", data: [{ id: "edit-e2e", type: "inpaint", model_spec: { name: "Retouche E2E", privacy: "private", traits: ["default"] } }] });
+        }
+        if (["video", "music", "tts", "embedding"].includes(url.searchParams.get("type"))) return json(200, { object: "list", data: [] });
         if (url.searchParams.get("type") === "image") {
           return json(200, {
             object: "list",
@@ -150,7 +154,14 @@ export function startMock(port = 0) {
       if (req.method === "POST" && url.pathname === "/v1/image/generate") {
         const parsed = JSON.parse(body);
         requests.push({ auth: req.headers.authorization, path: url.pathname, ...parsed });
-        return json(200, { id: "generate-image-e2e", images: [PIXEL], timing: { inferenceDuration: 1, inferencePreprocessingTime: 0, inferenceQueueTime: 0, total: 1200 } });
+        const n = Math.min(4, parsed.variants ?? 1);
+        return json(200, { id: "generate-image-e2e", images: Array(n).fill(PIXEL), timing: { inferenceDuration: 1, inferencePreprocessingTime: 0, inferenceQueueTime: 0, total: 1200 } });
+      }
+      if (req.method === "POST" && ["/v1/image/upscale", "/v1/image/background-remove", "/v1/image/edit"].includes(url.pathname)) {
+        const parsed = JSON.parse(body);
+        requests.push({ auth: req.headers.authorization, path: url.pathname, ...parsed });
+        res.writeHead(200, { "Content-Type": "image/png" });
+        return res.end(Buffer.from(PIXEL, "base64"));
       }
       if (req.method === "GET" && url.pathname === "/v1/characters") {
         const all = [

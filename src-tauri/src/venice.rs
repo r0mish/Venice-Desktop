@@ -843,6 +843,56 @@ pub async fn characters(base: &str, key: &str, search: &str) -> Result<Vec<Chara
         .collect())
 }
 
+/// Base64 d'une data URL (ou de la chaîne telle quelle).
+fn base64_of(data_url: &str) -> &str {
+    data_url.split_once(',').map_or(data_url, |(_, b)| b)
+}
+
+/// Réponse binaire d'image → data URL, avec le type renvoyé par l'API.
+async fn image_response(resp: reqwest::Response) -> Result<String, String> {
+    use base64::Engine;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
+    let mime = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .filter(|m| m.starts_with("image/"))
+        .unwrap_or("image/png")
+        .to_owned();
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+    Ok(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
+}
+
+/// Retouches d'une image existante : agrandissement, détourage, modification par un texte.
+pub enum ImageOp<'a> {
+    Upscale { scale: u32 },
+    RemoveBackground,
+    Edit { model: &'a str, prompt: &'a str, safe_mode: bool },
+}
+
+pub async fn transform_image(base: &str, key: &str, data_url: &str, op: ImageOp<'_>, cancel: Arc<Notify>) -> Result<String, String> {
+    if !is_venice(base) {
+        return Err("Les retouches d'image nécessitent l'API Venice.".into());
+    }
+    let image = base64_of(data_url);
+    let (path, body) = match op {
+        ImageOp::Upscale { scale } => ("image/upscale", json!({ "image": image, "scale": if scale >= 4 { 4 } else { 2 } })),
+        ImageOp::RemoveBackground => ("image/background-remove", json!({ "image": image })),
+        ImageOp::Edit { model, prompt, safe_mode } => (
+            "image/edit",
+            json!({ "image": image, "prompt": prompt, "model": model, "safe_mode": safe_mode, "output_format": "png" }),
+        ),
+    };
+    let send = client()?.post(endpoint(base, path)).bearer_auth(key).json(&body).timeout(Duration::from_secs(300)).send();
+    let resp = tokio::select! {
+        r = send => r.map_err(|e| format!("Connexion impossible : {e}"))?,
+        _ = cancel.notified() => return Err("Annulé".into()),
+    };
+    image_response(resp).await
+}
+
 /// Solde du compte (USD, DIEM, crédits).
 pub async fn balance(base: &str, key: &str) -> Result<Value, String> {
     if !is_venice(base) {
@@ -1004,6 +1054,12 @@ mod tests {
         let img = model_info(&json!({ "id": "flux", "type": "image", "model_spec": { "pricing": { "generation": { "usd": 0.01 } } } })).unwrap();
         assert!(!img.vision && !img.tools);
         assert_eq!(img.image_price, Some(0.01));
+    }
+
+    #[test]
+    fn data_url_payload() {
+        assert_eq!(base64_of("data:image/webp;base64,QUJD"), "QUJD");
+        assert_eq!(base64_of("QUJD"), "QUJD");
     }
 
     #[test]

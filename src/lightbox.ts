@@ -1,4 +1,5 @@
-// Visionneuse d'images : zoom (molette, +/−, clic), déplacement à la souris, enregistrement.
+// Visionneuse d'images : zoom (molette, +/−, clic), déplacement, enregistrement et retouches
+// (agrandissement, détourage, modification par une consigne).
 import { api } from "./api";
 import { $, errMsg } from "./state";
 
@@ -7,6 +8,16 @@ const stage = $("#lb-stage");
 const img = $<HTMLImageElement>("#lb-img");
 const zoomLabel = $("#lb-zoom");
 const saveBtn = $<HTMLButtonElement>("#lb-save");
+const actions = $("#lb-actions");
+const status = $("#lb-status");
+const openBtn = $<HTMLButtonElement>("#lb-open");
+const editForm = $<HTMLFormElement>("#lb-edit");
+const editInput = $<HTMLInputElement>("#lb-edit-input");
+
+export type Transform = (op: "upscale2" | "upscale4" | "background" | "edit", src: string, prompt?: string) => Promise<string | null>;
+let transform: Transform | null = null;
+let openConv: (() => void) | null = null;
+let busy = false;
 
 const MAX_SCALE = 8;
 /** Échelle courante, échelle « ajustée à la fenêtre » et décalage depuis le centre (px). */
@@ -88,9 +99,50 @@ stage.addEventListener("pointerup", (e) => {
   else dlg.close();
 });
 
+/** Applique une retouche et affiche le résultat (ajouté aussi à la conversation). */
+async function run(op: Parameters<Transform>[0], prompt?: string) {
+  if (!transform || busy) return;
+  busy = true;
+  dlg.classList.add("busy");
+  status.textContent = op === "edit" ? "Modification en cours…" : op === "background" ? "Détourage en cours…" : "Agrandissement en cours…";
+  try {
+    const result = await transform(op, img.src, prompt);
+    if (result) {
+      img.src = result;
+      status.textContent = "Terminé : résultat ajouté à la conversation";
+    } else {
+      status.textContent = "Échec (voir la conversation)";
+    }
+  } finally {
+    busy = false;
+    dlg.classList.remove("busy");
+  }
+}
+
+editForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const prompt = editInput.value.trim();
+  if (!prompt) return;
+  editForm.hidden = true;
+  run("edit", prompt);
+});
+
 dlg.addEventListener("click", async (e) => {
   const action = (e.target as HTMLElement).closest<HTMLElement>("[data-lb]")?.dataset.lb;
   switch (action) {
+    case "upscale2":
+    case "upscale4":
+    case "background":
+      return run(action);
+    case "edit":
+      editForm.hidden = false;
+      return editInput.focus();
+    case "edit-cancel":
+      editForm.hidden = true;
+      return;
+    case "open":
+      dlg.close();
+      return openConv?.();
     case "in":
       return zoomTo(scale * 1.5);
     case "out":
@@ -112,6 +164,7 @@ dlg.addEventListener("click", async (e) => {
 });
 
 dlg.addEventListener("keydown", (e) => {
+  if (e.target === editInput) return;
   if (e.key === "+" || e.key === "=") zoomTo(scale * 1.5);
   else if (e.key === "-") zoomTo(scale / 1.5);
   else if (e.key === "0") zoomTo(fit);
@@ -128,10 +181,20 @@ export function initLightbox(opts: { toast: typeof toast }) {
   toast = opts.toast;
 }
 
-/** Ouvre l'image ; `name` (sans extension) active l'enregistrement. */
-export function openLightbox(src: string, name: string | null = null) {
+/**
+ * Ouvre l'image. `name` (sans extension) active l'enregistrement, `opts.transform` les retouches,
+ * `opts.openConv` le bouton « Ouvrir la conversation » (galerie).
+ */
+export function openLightbox(src: string, name: string | null = null, opts: { transform?: Transform; openConv?: () => void } = {}) {
   saveName = name;
   saveBtn.hidden = !name;
+  transform = opts.transform ?? null;
+  openConv = opts.openConv ?? null;
+  actions.hidden = !transform;
+  openBtn.hidden = !openConv;
+  editForm.hidden = true;
+  editInput.value = "";
+  status.textContent = "";
   img.onload = fitToStage;
   img.src = src;
   dlg.showModal();

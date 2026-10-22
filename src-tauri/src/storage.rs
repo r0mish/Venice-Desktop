@@ -82,6 +82,10 @@ pub struct Settings {
     pub image_negative_prompt: String,
     pub image_safe_mode: bool,
     pub image_hide_watermark: bool,
+    /// Modèle de retouche par un texte (vide = défaut de Venice).
+    pub image_edit_model: String,
+    /// Nombre d'images par génération (1 à 4).
+    pub image_variants: u32,
     /// Chiffrement des conversations, projets et mcp.json (clé dans le trousseau du système).
     pub encrypt_data: bool,
     /// Version du format des réglages, pour les migrations (absent = 0).
@@ -166,6 +170,8 @@ impl Default for Settings {
             image_negative_prompt: String::new(),
             image_safe_mode: true,
             image_hide_watermark: true,
+            image_edit_model: String::new(),
+            image_variants: 1,
             encrypt_data: true,
             settings_version: SETTINGS_VERSION,
         }
@@ -391,6 +397,44 @@ pub fn load_conversation(app: &AppHandle, id: &str) -> R<Conversation> {
     check_id(id)?;
     let bytes = read_secret(&conv_dir(app)?.join(format!("{id}.json")))?;
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GalleryItem {
+    pub conv_id: String,
+    pub conv_title: String,
+    pub msg_id: String,
+    /// Description de l'image (message de l'utilisateur qui la précède).
+    pub prompt: String,
+    pub model: String,
+    pub created_at: i64,
+    pub src: String,
+}
+
+/// Images générées de toutes les conversations, les plus récentes d'abord.
+pub fn gallery(app: &AppHandle) -> R<Vec<GalleryItem>> {
+    let mut out = Vec::new();
+    for summary in list_conversations(app)? {
+        let Ok(c) = load_conversation(app, &summary.id) else { continue };
+        for (i, m) in c.messages.iter().enumerate() {
+            let Some(images) = m.extra.get("generated").and_then(Value::as_array) else { continue };
+            let prompt = c.messages[..i].iter().rev().find(|p| p.role == "user").map(|p| p.content.clone()).unwrap_or_default();
+            for src in images.iter().filter_map(Value::as_str) {
+                out.push(GalleryItem {
+                    conv_id: c.id.clone(),
+                    conv_title: c.title.clone(),
+                    msg_id: m.extra.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    prompt: prompt.clone(),
+                    model: m.extra.get("model").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    created_at: m.extra.get("createdAt").and_then(Value::as_i64).unwrap_or(c.updated_at),
+                    src: src.to_owned(),
+                });
+            }
+        }
+    }
+    out.sort_by_key(|g| std::cmp::Reverse(g.created_at));
+    Ok(out)
 }
 
 pub fn save_conversation(app: &AppHandle, c: &Conversation) -> R<()> {

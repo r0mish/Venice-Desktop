@@ -62,6 +62,10 @@ export function renderChrome() {
   el.imgToggle.hidden = o.kind !== "chat" || !isVenice() || !state.imageModels.length;
   el.imgToggle.classList.toggle("on", img);
   el.imgAspect.hidden = !img;
+  el.imgVariants.hidden = !img;
+  el.imgVariants.value = String(state.imageVariants || state.settings.imageVariants || 1);
+  el.seedChip.hidden = !img || state.lockedSeed == null;
+  el.seedChip.textContent = `Graine ${state.lockedSeed} ×`;
   if (img) renderAspects();
   const configured = state.mcp.filter((s) => s.state !== "disabled").length;
   el.mcpToggle.hidden = configured === 0;
@@ -169,6 +173,11 @@ function renderAspects() {
   el.imgAspect.value = cur;
 }
 el.imgAspect.addEventListener("change", () => (state.imageAspect = el.imgAspect.value));
+el.imgVariants.addEventListener("change", () => (state.imageVariants = Number(el.imgVariants.value)));
+el.seedChip.addEventListener("click", () => {
+  state.lockedSeed = null;
+  renderChrome();
+});
 el.mcpToggle.addEventListener("click", () => setOpt("mcp", !opts().mcp));
 el.sysToggle.addEventListener("click", () => {
   const on = !opts().systemAccess;

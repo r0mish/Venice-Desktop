@@ -562,20 +562,25 @@ export function imageSize(info: ModelInfo | undefined, aspect: string): Pick<Ima
   return { width: round(w), height: round(h) };
 }
 
-/** Génère une image à partir du dernier message de l'utilisateur. */
-export async function runImage() {
+/**
+ * Tâche de génération (image, retouche…) affichée comme une réponse : activité, arrêt, bilan.
+ * `job` remplit le message et renvoie le texte du bilan.
+ */
+export async function runMediaJob(
+  phase: string,
+  detail: string,
+  model: string,
+  job: (requestId: string, msg: Message) => Promise<string>,
+): Promise<Message | null> {
   const conv = state.current;
-  if (!conv) return;
-  const prompt = [...conv.messages].reverse().find((m) => m.role === "user")?.content.trim() ?? "";
-  const model = state.selectedImageModel || autoModel("image");
-  const info = state.imageModels.find((m) => m.id === model);
+  if (!conv || state.busy) return null;
   const msg: Message = { id: uid(), role: "assistant", content: "", model, createdAt: Date.now() };
   conv.messages.push(msg);
   const requestId = uid();
   const runStart = Date.now();
   state.busy = { requestId, msgId: msg.id, stopped: false };
   state.lastRun = null;
-  state.activity = { phase: "Génération de l'image…", detail: info?.name ?? model, since: runStart, runStart, step: 1, maxSteps: 1 };
+  state.activity = { phase, detail, since: runStart, runStart, step: 1, maxSteps: 1 };
   clearInterval(activityTimer);
   activityTimer = window.setInterval(renderActivity, 1000);
   updateComposerState();
@@ -584,32 +589,15 @@ export async function runImage() {
   await saveCurrent();
   let outcome: Omit<RunOutcome, "convId">;
   try {
-    const limit = info?.constraints?.promptCharacterLimit;
-    if (!prompt) throw new Error("Décrivez l'image à générer.");
-    if (limit && prompt.length > limit) throw new Error(`Description trop longue pour ${model} : ${prompt.length} caractères, ${limit} au maximum.`);
-    const res = await api.generateImage(requestId, {
-      model,
-      prompt,
-      negativePrompt: state.settings.imageNegativePrompt,
-      ...imageSize(info, state.imageAspect || state.settings.imageAspect),
-      safeMode: state.settings.imageSafeMode,
-      hideWatermark: state.settings.imageHideWatermark,
-    });
-    msg.generated = res.images;
-    if (res.blurred) msg.blurred = true;
-    const cost = info?.imagePrice ? ` · ${fmtCost(info.imagePrice * res.images.length)}` : "";
-    outcome = {
-      kind: "done",
-      text: `Image générée en ${fmtDuration(Date.now() - runStart)}${cost}${res.blurred ? " · floutée par le mode sûr (Réglages → Outils)" : ""}`,
-      canContinue: false,
-    };
+    const text = await job(requestId, msg);
+    outcome = { kind: "done", text: `${text} en ${fmtDuration(Date.now() - runStart)}`, canContinue: false };
   } catch (e) {
     if (state.busy?.stopped) {
       msg.cancelled = true;
-      outcome = { kind: "stopped", text: "Génération arrêtée.", canContinue: false };
+      outcome = { kind: "stopped", text: "Arrêté à votre demande.", canContinue: false };
     } else {
       msg.error = errMsg(e);
-      outcome = { kind: "error", text: `Échec de la génération : ${msg.error}`, canContinue: false };
+      outcome = { kind: "error", text: `Échec : ${msg.error}`, canContinue: false };
     }
   }
   state.lastRun = { ...outcome, convId: conv.id };
@@ -622,6 +610,62 @@ export async function runImage() {
   renderSidebar();
   await saveCurrent();
   checkBudget();
+  return msg.error || msg.cancelled ? null : msg;
+}
+
+/** Génère une ou plusieurs images à partir du dernier message de l'utilisateur. */
+export async function runImage() {
+  const conv = state.current;
+  if (!conv) return;
+  const prompt = [...conv.messages].reverse().find((m) => m.role === "user")?.content.trim() ?? "";
+  const model = state.selectedImageModel || autoModel("image");
+  const info = state.imageModels.find((m) => m.id === model);
+  const variants = Math.min(4, Math.max(1, state.imageVariants || state.settings.imageVariants || 1));
+  // Graine choisie (réutilisée) ou tirée au hasard, gardée pour pouvoir la réutiliser.
+  const seed = state.lockedSeed ?? Math.floor(Math.random() * 2 ** 31);
+  await runMediaJob("Génération de l'image…", info?.name ?? model, model, async (requestId, msg) => {
+    const limit = info?.constraints?.promptCharacterLimit;
+    if (!prompt) throw new Error("Décrivez l'image à générer.");
+    if (limit && prompt.length > limit) throw new Error(`Description trop longue pour ${model} : ${prompt.length} caractères, ${limit} au maximum.`);
+    const res = await api.generateImage(requestId, {
+      model,
+      prompt,
+      negativePrompt: state.settings.imageNegativePrompt,
+      ...imageSize(info, state.imageAspect || state.settings.imageAspect),
+      safeMode: state.settings.imageSafeMode,
+      hideWatermark: state.settings.imageHideWatermark,
+      variants,
+      seed,
+    });
+    msg.generated = res.images;
+    msg.seed = seed;
+    if (res.blurred) msg.blurred = true;
+    const cost = info?.imagePrice ? ` · ${fmtCost(info.imagePrice * res.images.length)}` : "";
+    return `${res.images.length > 1 ? `${res.images.length} images générées` : "Image générée"}${cost}${res.blurred ? " · floutée par le mode sûr (Réglages → Outils)" : ""}`;
+  });
+}
+
+const TRANSFORM_LABEL = {
+  upscale2: "Agrandir ×2",
+  upscale4: "Agrandir ×4",
+  background: "Supprimer l'arrière-plan",
+  edit: "Modifier",
+} as const;
+export type ImageOp = keyof typeof TRANSFORM_LABEL;
+
+/** Retouche une image ; le résultat est ajouté à la conversation et renvoyé (data URL). */
+export async function runTransform(op: ImageOp, src: string, prompt = ""): Promise<string | null> {
+  const conv = state.current;
+  if (!conv || state.busy) return null;
+  const label = op === "edit" ? `Modifier l'image : ${prompt}` : TRANSFORM_LABEL[op];
+  const model = op === "edit" ? state.settings.imageEditModel || autoModel("edit") : op === "background" ? "background-remove" : "upscale";
+  // L'image d'origine accompagne la demande, mais n'est jamais envoyée au modèle de texte.
+  conv.messages.push({ id: uid(), role: "user", content: label, createdAt: Date.now(), images: [src], imageOp: true });
+  const msg = await runMediaJob(`${TRANSFORM_LABEL[op]}…`, op === "edit" ? model : "", model, async (requestId, m) => {
+    m.generated = [await api.transformImage(requestId, { op, image: src, prompt, model })];
+    return TRANSFORM_LABEL[op] === "Modifier" ? "Image modifiée" : `${TRANSFORM_LABEL[op]} : terminé`;
+  });
+  return msg?.generated?.[0] ?? null;
 }
 
 export async function stop() {

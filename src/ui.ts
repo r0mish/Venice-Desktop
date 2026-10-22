@@ -40,6 +40,7 @@ export const icons = {
   speaker: '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>',
   stop: '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>',
+  seed: '<svg viewBox="0 0 24 24"><path d="M12 22V11"/><path d="M12 11C12 6 8 3 3 3c0 5 4 8 9 8zM12 13c0-4 3-7 8-7 0 4-3 7-8 7z"/></svg>',
 };
 
 export function autoGrow(ta: HTMLTextAreaElement) {
@@ -68,10 +69,14 @@ function byTrait(list: ModelInfo[], ...traits: string[]): ModelInfo | undefined 
 }
 
 /** Choix automatique : modèle par défaut de Venice, en respectant l'option « modèles privés ». */
-export function autoModel(kind: "chat" | "code" | "image"): string {
+export function autoModel(kind: "chat" | "code" | "image" | "edit"): string {
   if (kind === "image") {
     const list = visibleModels(state.imageModels);
     return (byTrait(list, "default") ?? list[0])?.id ?? "";
+  }
+  if (kind === "edit") {
+    const list = visibleModels(state.editModels);
+    return (byTrait(list, "default") ?? list[0])?.id ?? "firered-image-edit";
   }
   const list = visibleModels(state.models);
   const pick =
@@ -114,10 +119,10 @@ export function modelTitle(m: ModelInfo | undefined): string {
  * Remplit un <select> de modèles. `auto` : première option « Automatique » (valeur vide).
  * `kind` image : liste des modèles d'image.
  */
-export function fillModelSelect(select: HTMLSelectElement, value: string, { auto = false, kind = "text" as "text" | "image" } = {}) {
-  const source = kind === "image" ? state.imageModels : state.models;
+export function fillModelSelect(select: HTMLSelectElement, value: string, { auto = false, kind = "text" as "text" | "image" | "edit" } = {}) {
+  const source = kind === "image" ? state.imageModels : kind === "edit" ? state.editModels : state.models;
   const list = visibleModels(source);
-  const extras = kind === "image" ? [value] : [state.current?.model, value];
+  const extras = kind === "text" ? [state.current?.model, value] : [value];
   const options = list.map((m) => `<option value="${escapeHtml(m.id)}">${escapeHtml(modelLabel(m))}</option>`);
   if (!source.length && kind === "text") options.push(`<option value="${FALLBACK_MODEL}">${FALLBACK_MODEL}</option>`);
   for (const extra of extras) {
@@ -140,7 +145,12 @@ export function fillTopModelSelect() {
 
 export async function loadModels() {
   if (!state.keyConfigured) return;
-  const [text, image] = await Promise.allSettled([api.listModels("text"), isVenice() ? api.listModels("image") : Promise.resolve([])]);
+  const none = Promise.resolve([] as ModelInfo[]);
+  const [text, image, edit] = await Promise.allSettled([
+    api.listModels("text"),
+    isVenice() ? api.listModels("image") : none,
+    isVenice() ? api.listModels("inpaint") : none,
+  ]);
   if (text.status === "fulfilled") {
     state.models = text.value;
     modelPrices.clear();
@@ -149,6 +159,7 @@ export async function loadModels() {
     toast(`Liste des modèles indisponible : ${errMsg(text.reason)}`, true);
   }
   if (image.status === "fulfilled") state.imageModels = image.value;
+  if (edit.status === "fulfilled") state.editModels = edit.value;
   if (!state.current) state.selectedModel = defaultModelFor(state.mode);
   state.selectedImageModel ||= state.settings.imageModel || autoModel("image");
   fillTopModelSelect();

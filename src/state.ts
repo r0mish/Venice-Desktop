@@ -25,6 +25,8 @@ export const el = {
   webToggle: $<HTMLButtonElement>("#web-toggle"),
   imgToggle: $<HTMLButtonElement>("#img-toggle"),
   imgAspect: $<HTMLSelectElement>("#img-aspect"),
+  imgVariants: $<HTMLSelectElement>("#img-variants"),
+  seedChip: $<HTMLButtonElement>("#seed-chip"),
   mcpToggle: $<HTMLButtonElement>("#mcp-toggle"),
   sysToggle: $<HTMLButtonElement>("#sys-toggle"),
   sendBtn: $<HTMLButtonElement>("#send-btn"),
@@ -90,6 +92,8 @@ export const state = {
   keyConfigured: false,
   models: [] as ModelInfo[],
   imageModels: [] as ModelInfo[],
+  /** Modèles de retouche d'image par un texte. */
+  editModels: [] as ModelInfo[],
   convs: [] as ConversationSummary[],
   workspaces: [] as string[],
   mcp: [] as McpServerStatus[],
@@ -102,6 +106,10 @@ export const state = {
   selectedModel: "",
   selectedImageModel: "",
   imageAspect: "",
+  /** Images par génération (0 = réglage par défaut). */
+  imageVariants: 0,
+  /** Graine imposée aux prochaines générations (null = au hasard). */
+  lockedSeed: null as number | null,
   /** Génération d'images active pour la conversation ou le brouillon (mode Chat). */
   get imageMode(): boolean {
     return opts().kind === "chat" && opts().imageGen;

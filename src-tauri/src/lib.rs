@@ -627,6 +627,43 @@ async fn generate_image(
     result
 }
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ImageTransform {
+    /// « upscale2 », « upscale4 », « background » ou « edit ».
+    op: String,
+    image: String,
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    model: String,
+}
+
+/// Retouche d'une image : agrandissement ×2/×4, détourage, modification par un texte.
+#[tauri::command]
+async fn transform_image(app: AppHandle, streams: State<'_, Streams>, request_id: String, request: ImageTransform) -> CmdResult<String> {
+    let settings = storage::load_settings(&app)?;
+    let op = match request.op.as_str() {
+        "upscale2" => venice::ImageOp::Upscale { scale: 2 },
+        "upscale4" => venice::ImageOp::Upscale { scale: 4 },
+        "background" => venice::ImageOp::RemoveBackground,
+        "edit" if !request.prompt.trim().is_empty() => venice::ImageOp::Edit { model: &request.model, prompt: request.prompt.trim(), safe_mode: settings.image_safe_mode },
+        "edit" => return Err("Décrivez la modification à apporter".into()),
+        other => return Err(format!("Retouche inconnue : {other}")),
+    };
+    let cancel = Arc::new(Notify::new());
+    streams.0.lock().unwrap().insert(request_id.clone(), cancel.clone());
+    let result = venice::transform_image(&settings.base_url, &api_key()?, &request.image, op, cancel).await;
+    streams.0.lock().unwrap().remove(&request_id);
+    result
+}
+
+/// Toutes les images générées, de la plus récente à la plus ancienne (galerie).
+#[tauri::command]
+async fn list_gallery(app: AppHandle) -> CmdResult<Vec<storage::GalleryItem>> {
+    tauri::async_runtime::spawn_blocking(move || storage::gallery(&app)).await.map_err(|e| e.to_string())?
+}
+
 /// Enregistre une image générée (data URL) via la boîte « Enregistrer sous » native.
 #[tauri::command]
 async fn save_image(app: AppHandle, data_url: String, name: String) -> CmdResult<bool> {
@@ -846,6 +883,8 @@ pub fn run() {
             speak,
             account_balance,
             list_characters,
+            transform_image,
+            list_gallery,
             mcp_get_config,
             mcp_save_config,
             mcp_restart,

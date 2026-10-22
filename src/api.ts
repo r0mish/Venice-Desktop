@@ -60,6 +60,10 @@ export interface Settings {
   /** Floutage des images pour adultes (filtre de Venice). */
   imageSafeMode: boolean;
   imageHideWatermark: boolean;
+  /** Modèle de retouche par un texte (vide = défaut de Venice). */
+  imageEditModel: string;
+  /** Images par génération (1 à 4). */
+  imageVariants: number;
   encryptData: boolean;
   settingsVersion?: number;
 }
@@ -132,6 +136,18 @@ export interface ImageRequest {
   height?: number;
   safeMode: boolean;
   hideWatermark: boolean;
+  variants?: number;
+  seed?: number;
+}
+
+export interface GalleryItem {
+  convId: string;
+  convTitle: string;
+  msgId: string;
+  prompt: string;
+  model: string;
+  createdAt: number;
+  src: string;
 }
 
 export interface Balance {
@@ -180,6 +196,10 @@ export interface Message {
   generated?: string[];
   /** Image floutée par le mode sûr. */
   blurred?: boolean;
+  /** Graine de la génération, pour la réutiliser. */
+  seed?: number;
+  /** Demande de retouche : l'image jointe n'est pas envoyée au modèle de texte. */
+  imageOp?: boolean;
 }
 
 export interface Compaction {
@@ -407,7 +427,8 @@ export const api = {
   deleteKey: () => invoke<void>("delete_api_key"),
   getSettings: () => invoke<Settings>("get_settings"),
   saveSettings: (settings: Settings) => invoke<void>("save_settings", { settings }),
-  listModels: (kind: "text" | "image" = "text") => invoke<ModelInfo[]>("list_models", { kind }),
+  listModels: (kind: "text" | "image" | "inpaint" | "video" | "music" | "tts" | "embedding" = "text") =>
+    invoke<ModelInfo[]>("list_models", { kind }),
   listConversations: () => invoke<ConversationSummary[]>("list_conversations"),
   loadConversation: (id: string) => invoke<Conversation>("load_conversation", { id }),
   saveConversation: (conversation: Conversation) => invoke<void>("save_conversation", { conversation }),
@@ -492,6 +513,9 @@ export const api = {
     invoke<{ images: string[]; blurred: boolean; seconds: number | null }>("generate_image", { requestId, request }),
   saveImage: (dataUrl: string, name: string) => invoke<boolean>("save_image", { dataUrl, name }),
   speak: (text: string) => invoke<string>("speak", { text }),
+  transformImage: (requestId: string, request: { op: string; image: string; prompt: string; model: string }) =>
+    invoke<string>("transform_image", { requestId, request }),
+  listGallery: () => invoke<GalleryItem[]>("list_gallery"),
   balance: () => invoke<Balance>("account_balance"),
   listCharacters: (search: string) => invoke<Character[]>("list_characters", { search }),
 

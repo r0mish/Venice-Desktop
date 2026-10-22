@@ -5,9 +5,9 @@ import { escapeHtml, renderMarkdown } from "./markdown";
 import { openSshDialog, workspaceLabel } from "./ssh-ui";
 import { findProject, openProjectDialog, projectChars } from "./projects-ui";
 import { el, FULL_PROJECT_CHARS, opts, state } from "./state";
-import { autoGrow, copy, icons, isVenice, toast } from "./ui";
+import { autoGrow, copy, fillTopModelSelect, icons, isVenice, toast } from "./ui";
 import { chooseWorkspace, renderChrome, selectWorkspace } from "./chrome";
-import { runAgent, runImage, runTurn } from "./run";
+import { runAgent, runImage, runTransform, runTurn } from "./run";
 import { initSpeech, speak, speakingId } from "./speech";
 import { openLightbox } from "./lightbox";
 import { openSettings } from "./settings-ui";
@@ -116,7 +116,7 @@ function messageHtml(m: Message, next: Message | undefined): string {
   const body = m.content
     ? renderMarkdown(withCitationLinks(m.content, m.citations))
     : streaming && !m.reasoning && !tools ? '<span class="typing"><i></i><i></i><i></i></span>' : "";
-  const meta = [m.model, m.usage ? `${m.usage.promptTokens} → ${m.usage.completionTokens} tokens` : "", m.blurred ? "floutée (mode sûr)" : "", m.cancelled ? "interrompu" : ""]
+  const meta = [m.model, m.usage ? `${m.usage.promptTokens} → ${m.usage.completionTokens} tokens` : "", m.seed != null ? `graine ${m.seed}` : "", m.blurred ? "floutée (mode sûr)" : "", m.cancelled ? "interrompu" : ""]
     .filter(Boolean)
     .join(" · ");
   const error = m.error
@@ -131,7 +131,8 @@ function messageHtml(m: Message, next: Message | undefined): string {
     : `<div class="msg-actions">
         ${m.generated?.length ? "" : `<button class="icon-btn sm" data-act="copy" title="Copier">${icons.copy}</button>`}
         ${canSpeak ? `<button class="icon-btn sm${speaking ? " on" : ""}" data-act="speak" title="${speaking ? "Arrêter la lecture" : "Lire à voix haute"}">${speaking ? icons.stop : icons.speaker}</button>` : ""}
-        ${!next ? `<button class="icon-btn sm" data-act="retry" title="${m.generated?.length ? "Générer une autre image" : "Régénérer"}">${icons.retry}</button>` : ""}
+        ${m.seed != null ? `<button class="icon-btn sm" data-act="seed" title="Réutiliser la graine ${m.seed} pour les prochaines images (variations proches)">${icons.seed}</button>` : ""}
+        ${!next && !isImageOp(m) ? `<button class="icon-btn sm" data-act="retry" title="${m.generated?.length ? "Générer une autre image" : "Régénérer"}">${icons.retry}</button>` : ""}
         <span class="meta">${escapeHtml(meta)}</span>
       </div>`;
   return `<div class="msg assistant${streaming ? " streaming" : ""}" data-id="${m.id}">
@@ -272,7 +273,8 @@ el.messages.addEventListener("click", async (ev) => {
   const zoomImg = t.closest<HTMLImageElement>(".gen-image img, .msg-attachments img");
   if (zoomImg && state.current) {
     const m = state.current.messages.find((x) => x.id === zoomImg.closest<HTMLElement>(".msg")?.dataset.id);
-    return openLightbox(zoomImg.src, m?.generated?.length ? imageName(m) : null);
+    const transform = isVenice() ? (op: Parameters<typeof runTransform>[0], src: string, prompt?: string) => runTransform(op, src, prompt) : undefined;
+    return openLightbox(zoomImg.src, m ? imageName(m) : "image", { transform });
   }
 
   const codeBtn = t.closest<HTMLElement>(".copy-code");
@@ -292,12 +294,26 @@ el.messages.addEventListener("click", async (ev) => {
       return copy(turnText(msg), actBtn);
     case "retry":
       return regenerate(msg);
+    case "seed":
+      state.lockedSeed = msg.seed ?? null;
+      if (!state.imageMode && state.current) {
+        state.current.imageGen = true;
+        fillTopModelSelect();
+      }
+      renderChrome();
+      return toast(`Graine ${msg.seed} réutilisée pour les prochaines images`);
     case "speak":
       return speak(msg.id, turnText(msg)).catch((e) => toast(`Lecture impossible : ${e instanceof Error ? e.message : String(e)}`, true));
     case "edit":
       return editMessage(msg, msgEl);
   }
 });
+
+/** Retouche (agrandissement…) : le résultat ne se régénère pas comme une image. */
+function isImageOp(m: Message): boolean {
+  const msgs = state.current?.messages ?? [];
+  return !!msgs[msgs.indexOf(m) - 1]?.imageOp;
+}
 
 /** Nom de fichier d'une image générée : début de la description qui l'a produite. */
 function imageName(m: Message): string {
