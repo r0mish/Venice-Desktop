@@ -72,7 +72,7 @@ impl Index {
         while let Some(h) = take(32) {
             let h: Hash = h.try_into().ok()?;
             let dim = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
-            let v = take(dim * 4)?.chunks_exact(4).map(|x| f32::from_le_bytes(x.try_into().unwrap())).collect();
+            let v = take(dim * 4)?.as_chunks::<4>().0.iter().map(|x| f32::from_le_bytes(*x)).collect();
             vectors.insert(h, v);
         }
         Some(Self { model, vectors })
