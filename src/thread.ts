@@ -7,7 +7,8 @@ import { findProject, openProjectDialog, projectChars } from "./projects-ui";
 import { el, FULL_PROJECT_CHARS, opts, state } from "./state";
 import { autoGrow, copy, fillTopModelSelect, icons, isVenice, toast } from "./ui";
 import { chooseWorkspace, renderChrome, selectWorkspace } from "./chrome";
-import { runAgent, runImage, runTransform, runTurn } from "./run";
+import { runAgent, runImage, runTransform, runTurn, saveCurrent } from "./run";
+import { fork, switchBranch } from "./branches";
 import { initSpeech, speak, speakingId } from "./speech";
 import { openLightbox } from "./lightbox";
 import { openSettings } from "./settings-ui";
@@ -99,6 +100,7 @@ function messageHtml(m: Message, next: Message | undefined): string {
     return `<div class="msg user" data-id="${m.id}">
       ${imgs || files ? `<div class="msg-attachments">${imgs}${files}</div>` : ""}
       <div class="bubble">${escapeHtml(m.content).replace(/\n/g, "<br>")}</div>
+      ${branchNav(m)}
       <div class="msg-actions">
         <button class="icon-btn sm" data-act="copy" title="Copier">${icons.copy}</button>
         <button class="icon-btn sm" data-act="edit" title="Modifier et renvoyer">${icons.edit}</button>
@@ -135,8 +137,9 @@ function messageHtml(m: Message, next: Message | undefined): string {
         ${!next && !isImageOp(m) ? `<button class="icon-btn sm" data-act="retry" title="${m.generated?.length ? "Générer une autre image" : "Régénérer"}">${icons.retry}</button>` : ""}
         <span class="meta">${escapeHtml(meta)}</span>
       </div>`;
+  const main = `${reasoning}${body ? `<div class="md">${body}</div>` : ""}${generated ? `<div class="gen-images">${generated}</div>` : ""}${sourcesHtml(m.citations)}${tools ? `<div class="tools">${tools}</div>` : ""}${error}`;
   return `<div class="msg assistant${streaming ? " streaming" : ""}" data-id="${m.id}">
-    ${reasoning}${body ? `<div class="md">${body}</div>` : ""}${generated ? `<div class="gen-images">${generated}</div>` : ""}${sourcesHtml(m.citations)}${tools ? `<div class="tools">${tools}</div>` : ""}${error}${actions}
+    ${m.compare ? compareHtml(m, main, streaming) : main}${actions}
   </div>`;
 }
 
@@ -166,6 +169,32 @@ function sourcesHtml(citations?: Citation[]): string {
     .map((c, i) => `<li><a href="${escapeHtml(c.url)}" data-external title="${escapeHtml(c.url)}"><span class="src-n">${i + 1}</span>${escapeHtml(c.title)}<small>${escapeHtml(host(c.url))}${c.date ? ` · ${escapeHtml(c.date.slice(0, 10))}` : ""}</small></a></li>`)
     .join("");
   return `<details class="sources"><summary>${citations.length} source${citations.length > 1 ? "s" : ""} web</summary><ol>${items}</ol></details>`;
+}
+
+/** Deux réponses côte à côte : modèle principal et modèle comparé. */
+function compareHtml(m: Message, main: string, streaming: boolean): string {
+  const c = m.compare!;
+  const body = c.content
+    ? `<div class="md">${renderMarkdown(c.content)}</div>`
+    : streaming && !c.error ? '<span class="typing"><i></i><i></i><i></i></span>' : "";
+  const reasoning = c.reasoning ? `<details class="reasoning"><summary>Raisonnement</summary><div class="md">${renderMarkdown(c.reasoning)}</div></details>` : "";
+  const keep = !streaming && !m.toolCalls?.length && c.content ? '<button class="btn-ghost sm" data-act="keep-compare" title="Continuer la conversation avec cette réponse">Garder cette réponse</button>' : "";
+  return `<div class="compare-grid">
+    <div class="cmp-col"><div class="cmp-head"><strong>${escapeHtml(m.model ?? "")}</strong></div>${main}</div>
+    <div class="cmp-col"><div class="cmp-head"><strong>${escapeHtml(c.model)}</strong>${keep}</div>${reasoning}${body}${c.error ? `<div class="msg-error">${escapeHtml(c.error)}</div>` : ""}</div>
+  </div>`;
+}
+
+/** Navigation entre les versions d'un message (‹ 2/3 ›). */
+function branchNav(m: Message): string {
+  const n = m.branches?.length ?? 0;
+  if (n < 2) return "";
+  const i = m.branch ?? 0;
+  return `<span class="branch-nav" title="Versions de ce message et de leur suite">
+    <button class="icon-btn sm" data-act="branch-prev"${i === 0 ? " disabled" : ""} title="Version précédente">‹</button>
+    <span>${i + 1}/${n}</span>
+    <button class="icon-btn sm" data-act="branch-next"${i === n - 1 ? " disabled" : ""} title="Version suivante">›</button>
+  </span>`;
 }
 
 /** Risque déduit du nom quand la définition n'est pas (encore) chargée. */
@@ -294,6 +323,22 @@ el.messages.addEventListener("click", async (ev) => {
       return copy(turnText(msg), actBtn);
     case "retry":
       return regenerate(msg);
+    case "keep-compare": {
+      const c = msg.compare;
+      if (!c || state.busy) return;
+      msg.compare = { model: msg.model ?? "", content: msg.content, reasoning: msg.reasoning, usage: msg.usage };
+      Object.assign(msg, { model: c.model, content: c.content, reasoning: c.reasoning, usage: c.usage, citations: undefined, error: undefined });
+      rerenderMessage(msg, true);
+      return saveCurrent();
+    }
+    case "branch-prev":
+    case "branch-next": {
+      if (state.busy) return;
+      const idx = state.current.messages.indexOf(msg);
+      switchBranch(state.current, idx, (msg.branch ?? 0) + (actBtn.dataset.act === "branch-next" ? 1 : -1));
+      renderConversation();
+      return saveCurrent();
+    }
     case "seed":
       state.lockedSeed = msg.seed ?? null;
       if (!state.imageMode && state.current) {
@@ -354,6 +399,8 @@ function editMessage(msg: Message, node: HTMLElement) {
       const text = ta.value.trim();
       if (!text || !state.current) return;
       const idx = state.current.messages.findIndex((m) => m.id === msg.id);
+      // L'ancienne version et sa suite restent consultables (‹ 1/2 ›).
+      fork(state.current, idx);
       msg.content = text;
       state.current.messages = state.current.messages.slice(0, idx + 1);
       await runTurn();
@@ -368,7 +415,8 @@ async function regenerate(msg: Message) {
   // On repart du dernier message utilisateur précédant ce tour.
   while (idx >= 0 && msgs[idx].role !== "user") idx--;
   if (idx < 0) return;
-  state.current.messages = msgs.slice(0, idx + 1);
+  fork(state.current, idx);
+  state.current.messages = state.current.messages.slice(0, idx + 1);
   renderConversation();
   await (msg.generated?.length ? runImage() : runAgent());
 }

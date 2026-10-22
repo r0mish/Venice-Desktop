@@ -855,3 +855,16 @@ table.usage th { color: var(--muted); font-weight: 500; }
 .gallery-item small { padding: 0 8px 6px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lb-edit .btn-ghost { color: #fff; border-color: rgba(255, 255, 255, 0.25); }
 .lb-edit .btn-ghost:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* ---------------------------------------------------------------- branches, comparaison */
+.branch-nav { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.branch-nav .icon-btn { font-size: 16px; }
+.branch-nav .icon-btn:disabled { opacity: 0.3; cursor: default; }
+.msg.user .branch-nav { align-self: flex-end; }
+#compare-select { max-width: 170px; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-elev); font-size: 13px; color: var(--muted); }
+#compare-select.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+#topbar #compare-select { max-width: 150px; }
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.cmp-col { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elev); }
+.cmp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+@media (max-width: 900px) { .compare-grid { grid-template-columns: 1fr; } }

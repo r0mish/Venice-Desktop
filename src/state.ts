@@ -47,6 +47,7 @@ export const el = {
   convProject: $<HTMLSelectElement>("#conv-project"),
   promptSelect: $<HTMLSelectElement>("#prompt-select"),
   effortSelect: $<HTMLSelectElement>("#effort-select"),
+  compareSelect: $<HTMLSelectElement>("#compare-select"),
   slashMenu: $("#slash-menu"),
 };
 
@@ -84,6 +85,7 @@ export interface Draft {
   promptId?: string;
   reasoningEffort?: string;
   character?: { slug: string; name: string };
+  compareModel?: string;
 }
 
 export const state = {
@@ -101,7 +103,7 @@ export const state = {
   current: null as Conversation | null,
   draft: { webSearch: false, mcp: true, permissionMode: "ask" } as Draft,
   /** Exécution en cours (génération ou outil). */
-  busy: null as { requestId: string; msgId: string; stopped: boolean } | null,
+  busy: null as { requestId: string; msgId: string; stopped: boolean; extra?: string[] } | null,
   pending: { images: [] as string[], files: [] as TextFile[] },
   selectedModel: "",
   selectedImageModel: "",
@@ -188,6 +190,7 @@ export const opts = () => {
     systemAccess: !!(c ? c.systemAccess : state.draft.systemAccess),
     imageGen: !!(c ? c.imageGen : state.draft.imageGen),
     promptId: c ? c.promptId : state.draft.promptId,
+    compareModel: (c ? c.compareModel : state.draft.compareModel) ?? "",
     reasoningEffort: (c ? c.reasoningEffort : state.draft.reasoningEffort) ?? "",
     character: c ? c.character : state.draft.character,
     permissionMode: (c ? c.permissionMode : state.draft.permissionMode) ?? "ask",

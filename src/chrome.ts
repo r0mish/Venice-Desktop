@@ -6,7 +6,7 @@ import { openSshDialog, parseRemote, workspaceLabel } from "./ssh-ui";
 import { scheduleGitRefresh, toggleGitPanel } from "./git-ui";
 import { findProject, projectList } from "./projects-ui";
 import { el, errMsg, opts, state, type Draft } from "./state";
-import { copy, fillTopModelSelect, icons, isVenice, toast } from "./ui";
+import { copy, fillTopModelSelect, icons, isVenice, toast, visibleModels } from "./ui";
 import { openCharacterDialog } from "./characters-ui";
 import { newChat, projectOptions } from "./sidebar";
 import { renderConversation, renderWelcome } from "./thread";
@@ -51,6 +51,7 @@ export function renderChrome() {
   }
   renderPromptSelect(o.promptId, c?.systemPrompt ?? null, o.kind === "chat" ? o.character : undefined);
   renderEffortSelect(o.reasoningEffort);
+  renderCompareSelect(o.kind === "chat" ? o.compareModel : "");
   if (o.kind !== "code" || !o.workspace) toggleGitPanel(false);
   if (o.kind === "code") scheduleGitRefresh(200);
   else el.gitBtn.hidden = true;
@@ -79,6 +80,7 @@ export function renderChrome() {
   el.mcpToggle.hidden ||= img;
   el.promptSelect.hidden ||= img;
   el.effortSelect.hidden ||= img;
+  el.compareSelect.hidden ||= img || o.kind !== "chat";
   el.composer.classList.toggle("image-mode", img);
   updateComposerState();
   renderUsage();
@@ -153,6 +155,20 @@ function renderEffortSelect(effort: string) {
 }
 
 el.effortSelect.addEventListener("change", () => setOpt("reasoningEffort", el.effortSelect.value));
+
+/** Second modèle qui répond aussi, pour comparer les réponses côte à côte. */
+function renderCompareSelect(model: string) {
+  const list = visibleModels(state.models);
+  el.compareSelect.hidden = list.length < 2;
+  if (el.compareSelect.hidden) return;
+  el.compareSelect.innerHTML =
+    '<option value="">Comparer : non</option>' +
+    list.map((m) => `<option value="${escapeHtml(m.id)}">⇄ ${escapeHtml(m.name || m.id)}</option>`).join("");
+  el.compareSelect.value = list.some((m) => m.id === model) ? model : "";
+  el.compareSelect.classList.toggle("on", !!el.compareSelect.value);
+}
+
+el.compareSelect.addEventListener("change", () => setOpt("compareModel", el.compareSelect.value));
 
 el.webToggle.addEventListener("click", () => setOpt("webSearch", !opts().webSearch));
 el.imgToggle.addEventListener("click", () => {

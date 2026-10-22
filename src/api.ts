@@ -200,6 +200,11 @@ export interface Message {
   seed?: number;
   /** Demande de retouche : l'image jointe n'est pas envoyée au modèle de texte. */
   imageOp?: boolean;
+  /** Message utilisateur : versions (modifications, régénérations) et version affichée. */
+  branches?: { content: string; images?: string[]; files?: TextFile[]; tail: Message[] }[];
+  branch?: number;
+  /** Réponse d'un second modèle, affichée à côté (comparaison). */
+  compare?: { model: string; content: string; reasoning?: string; usage?: Usage; error?: string };
 }
 
 export interface Compaction {
@@ -241,6 +246,8 @@ export interface Conversation {
   systemAccess?: boolean;
   /** Les messages génèrent des images au lieu de texte. */
   imageGen?: boolean;
+  /** Second modèle qui répond aussi, pour comparer. */
+  compareModel?: string;
   compaction?: Compaction;
   /** Consommation hors messages (compactions), par modèle. */
   extraUsage?: Record<string, Usage>;

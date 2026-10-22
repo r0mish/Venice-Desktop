@@ -66,7 +66,7 @@ function script(req) {
   if (ask.includes("RÉFLÉCHIS")) {
     return { content: "<think>raisonnement caché</think>\n\nConclusion visible." };
   }
-  return { content: `Réponse simulée à : ${ask.slice(0, 60)}. Le mot témoin est **pamplemousse**.` };
+  return { content: `Réponse simulée à : ${ask.slice(0, 60)}. Le mot témoin est **pamplemousse** [${req.model}].` };
 }
 
 function sse(res, chunks) {

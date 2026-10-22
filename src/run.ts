@@ -68,6 +68,7 @@ export async function send() {
       systemPrompt: state.settings.systemPrompts.find((p) => p.id === o.promptId)?.text ?? null,
       promptId: o.promptId ?? "",
       ...(o.reasoningEffort ? { reasoningEffort: o.reasoningEffort } : {}),
+      ...(o.kind === "chat" && o.compareModel ? { compareModel: o.compareModel } : {}),
       ...(o.character ? { character: o.character } : {}),
       messages: [],
       workspace: o.workspace,
@@ -320,6 +321,43 @@ async function streamTurn(conv: Conversation, msg: Message, tools: Awaited<Retur
   return ok && !state.busy?.stopped;
 }
 
+/** Réponse d'un second modèle à la même question, affichée à côté de la réponse principale. */
+async function streamCompare(conv: Conversation, msg: Message, model: string) {
+  const requestId = uid();
+  state.busy?.extra?.push(requestId);
+  if (state.busy && !state.busy.extra) state.busy.extra = [requestId];
+  const cmp: NonNullable<Message["compare"]> = { model, content: "" };
+  msg.compare = cmp;
+  const messages = toApiMessages({ ...conv, messages: conv.messages.filter((m) => m !== msg) }, sysPrompt(conv));
+  try {
+    await api.chat(
+      requestId,
+      {
+        model,
+        messages,
+        temperature: state.settings.temperature,
+        maxTokens: state.settings.maxTokens,
+        tools: [],
+        webSearch: !!conv.webSearch,
+        characterSlug: conv.character?.slug ?? null,
+      },
+      (ev) => {
+        if (ev.type === "delta") cmp.content += ev.text;
+        else if (ev.type === "reasoning") cmp.reasoning = (cmp.reasoning ?? "") + ev.text;
+        else if (ev.type === "usage") {
+          cmp.usage = { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
+          recordUsage(conv, model, ev.promptTokens, ev.completionTokens, true);
+        } else if (ev.type === "done" && ev.cancelled) cmp.error = "Interrompu.";
+        rerenderMessage(msg);
+      },
+    );
+  } catch (e) {
+    cmp.error = errMsg(e);
+  }
+  if (!cmp.content && !cmp.error) cmp.error = "Réponse vide du modèle.";
+  rerenderMessage(msg);
+}
+
 function waitApproval(tc: ToolCallRec): Promise<"allow" | "always" | "deny"> {
   return new Promise((resolve) => {
     state.approvals.set(tc.id, (d) => {
@@ -481,7 +519,10 @@ export async function runAgent() {
       conv.messages.push(msg);
       if (state.busy) state.busy.msgId = msg.id;
       rerenderMessage(msg, true);
+      // Comparaison : le second modèle répond à la même question, en parallèle (sans outils).
+      const cmp = step === 1 && conv.kind === "chat" && conv.compareModel && conv.compareModel !== conv.model ? streamCompare(conv, msg, conv.compareModel) : null;
       const ok = await streamTurn(conv, msg, tools);
+      await cmp;
       if (!msg.content && !msg.reasoning && !msg.toolCalls?.length && !msg.error && !msg.cancelled) {
         msg.error = "Réponse vide du modèle.";
       }
@@ -673,7 +714,7 @@ export async function stop() {
   if (!b) return;
   b.stopped = true;
   for (const resolve of [...state.approvals.values()]) resolve("deny");
-  if (b.requestId) await api.cancel(b.requestId).catch(() => {});
+  for (const id of [b.requestId, ...(b.extra ?? [])]) if (id) await api.cancel(id).catch(() => {});
 }
 
 

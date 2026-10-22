@@ -230,6 +230,42 @@ test("application de bout en bout", async (t) => {
     await d.waitText("#toast", "Solde Venice bas");
   });
 
+  await step(t, "versions d'un message et comparaison de modèles", async () => {
+    const act = (sel) => d.exec((s) => document.querySelector(s).click(), sel);
+    await d.click("#new-chat");
+    await setValue(d, "#prompt-select", "");
+    await setValue(d, "#effort-select", "");
+    await send("Première question");
+    await d.waitText("#messages", "Première question. Le mot");
+    await idle(d);
+    await act('.msg.user [data-act="edit"]');
+    await setValue(d, ".edit-box textarea", "Question modifiée", "input");
+    await act('.edit-box [data-edit="send"]');
+    await d.waitText("#messages", "Question modifiée. Le mot");
+    await idle(d);
+    await d.waitText(".branch-nav", "2/2");
+    await act('.branch-nav [data-act="branch-prev"]');
+    await d.waitText(".branch-nav", "1/2");
+    await d.waitText("#messages", "Première question. Le mot");
+    assert.ok(!(await d.text("#messages")).includes("Question modifiée"), "seule la version affichée est visible");
+    await act('.msg.assistant:last-child [data-act="retry"]');
+    await idle(d);
+    await d.waitText(".branch-nav", "3/3");
+    // Comparaison avec un second modèle.
+    await setValue(d, "#compare-select", "modele-e2e-vision");
+    await send("Compare les réponses");
+    await d.waitFor(() => document.querySelectorAll(".msg.assistant:last-child .cmp-col .md").length === 2, { message: "deux réponses côte à côte" });
+    await idle(d);
+    const models = requests.slice(-2).map((r) => r.model).sort();
+    assert.deepEqual(models, ["modele-e2e-vision", "zai-org-glm-5-1"]);
+    await act('.msg.assistant:last-child [data-act="keep-compare"]');
+    await d.waitFor(() => document.querySelector(".msg.assistant:last-child .cmp-head strong").textContent === "modele-e2e-vision", { message: "réponse gardée" });
+    await setValue(d, "#compare-select", "");
+    await send("Et ensuite ?");
+    await idle(d);
+    assert.equal(requests.at(-1).messages.filter((m) => m.role === "assistant").at(-1).content.includes("[modele-e2e-vision]"), true, "la réponse gardée sert de contexte");
+  });
+
   await step(t, "raisonnement <think> séparé de la réponse", async () => {
     await send("RÉFLÉCHIS puis conclus");
     await d.waitText("#messages", "Conclusion visible.");
