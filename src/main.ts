@@ -1,5 +1,6 @@
 import "highlight.js/styles/github-dark.css";
 import "./styles.css";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
 import { today } from "./usage";
@@ -116,6 +117,16 @@ async function init() {
   });
   await refreshKeyStatus();
   newChat();
+  // Raccourci global : fenêtre ramenée au premier plan, nouvelle conversation.
+  listen("quick-chat", () => {
+    if (state.current) newChat();
+    el.input.focus();
+  }).catch(() => {});
+  try {
+    const pending = sessionStorage.getItem("toast");
+    sessionStorage.removeItem("toast");
+    if (pending) toast(pending);
+  } catch {}
   await refreshConvs().catch((e) => toast(errMsg(e), true));
   pollMcp();
   el.input.focus();

@@ -21,6 +21,21 @@ before(async () => {
     // Dossier de projet déjà autorisé (la boîte de dialogue native n'est pas pilotable).
     writeFileSync(join(data, "workspaces.json"), JSON.stringify([workspace]));
     writeFileSync(join(workspace, "AGENTS.md"), "# Consignes\n\nToujours respecter RÈGLE-E2E-42.\n");
+    // Gros projet (au-delà du seuil des fichiers joints en entier) : seule la recherche
+    // sémantique trouve le passage, qui n'a aucun mot commun avec la question.
+    const filler = "Paragraphe sans rapport, sur la météo et le jardinage.\n".repeat(1500);
+    mkdirSync(join(data, "projects"), { recursive: true });
+    writeFileSync(
+      join(data, "projects", "proj-semantique.json"),
+      JSON.stringify({
+        id: "proj-semantique",
+        name: "Gros projet",
+        instructions: "",
+        createdAt: 0,
+        updatedAt: 0,
+        files: [{ name: "bruit.md", text: filler }, { name: "infra.md", text: `${filler}\nLe NAS est restauré chaque nuit.\n${filler}` }],
+      }),
+    );
   });
   d = app.d;
 });
@@ -54,6 +69,23 @@ test("application de bout en bout", async (t) => {
     assert.deepEqual(req.stream_options, { include_usage: true });
     await d.waitText("#conv-list", "Bonjour depuis le test");
     await d.waitText("#activity", "Terminé");
+  });
+
+  await step(t, "modèle E2EE : attestation, messages chiffrés de bout en bout", async () => {
+    await d.click("#new-chat");
+    await setValue(d, "#model-select", "enclave-e2e");
+    await send("Secret pour l'enclave");
+    await d.waitText("#messages", "[enclave-e2e]");
+    await idle(d);
+    const att = requests.findLast((r) => r.path === "/v1/tee/attestation");
+    assert.equal(att?.model, "enclave-e2e");
+    const req = requests.at(-1);
+    assert.equal(req.venice_parameters.enable_e2ee, true);
+    assert.ok(!req.tools?.length, "aucun outil envoyé à l'enclave");
+    assert.ok(!JSON.stringify(req.messages).includes("Secret"), "aucun texte en clair sur le réseau");
+    assert.equal(req.decrypted.at(-1).content, "Secret pour l'enclave");
+    await d.waitText(".msg.assistant:last-child", "chiffré de bout en bout");
+    await d.waitText(".msg.assistant:last-child", "pamplemousse");
   });
 
   await step(t, "recherche web intégrée : sources citées", async () => {
@@ -361,6 +393,31 @@ test("application de bout en bout", async (t) => {
     await idle(d);
   });
 
+  await step(t, "projet volumineux : recherche sémantique (index mis en cache)", async () => {
+    await setValue(d, "#project-select", "proj-semantique");
+    await d.click("#new-chat");
+    await send("Où se trouve la copie de secours ?");
+    await d.waitText("#messages", "Passage absent");
+    await idle(d);
+    assert.ok(!requests.some((r) => r.path === "/v1/embeddings"), "aucun embedding sans l'option");
+    await d.click("#open-settings");
+    await d.click('.settings-tabs [data-tab="tools"]');
+    await d.click("#s-semantic");
+    await d.click("#settings-save");
+    await d.waitFor(() => !document.querySelector("#settings").open, { message: "réglages enregistrés" });
+    await send("Et la copie de secours, alors ?");
+    await d.waitText("#messages", "Passage trouvé : NAS");
+    await idle(d);
+    const first = requests.filter((r) => r.path === "/v1/embeddings");
+    assert.ok(first.some((r) => r.count > 10), "morceaux du projet vectorisés");
+    assert.equal(first[0].model, "text-embedding-bge-m3");
+    await send("Encore la copie de secours ?");
+    await d.waitFor(() => document.querySelectorAll(".msg.assistant").length === 3, { message: "troisième réponse" });
+    await idle(d);
+    const again = requests.filter((r) => r.path === "/v1/embeddings").slice(first.length);
+    assert.deepEqual(again.map((r) => r.count), [1], "seule la question est vectorisée (index en cache)");
+  });
+
   await step(t, "code : AGENTS.md chargé", async () => {
     await d.click('.mode-tabs [data-mode="code"]');
     await d.waitText(".welcome", "Nouvelle session de code");
@@ -404,5 +461,26 @@ test("application de bout en bout", async (t) => {
     await d.waitText("#messages", "Outil terminé");
     await idle(d);
     assert.equal(await d.exec(() => document.querySelectorAll("[data-approve]").length), 0);
+  });
+
+  await step(t, "sauvegarde chiffrée : export puis import", async () => {
+    await d.click("#open-settings");
+    await d.waitFor(() => document.querySelector("#settings").open, { message: "réglages ouverts" });
+    await d.type("#backup-pass", "phrase de passe e2e");
+    await d.click("#backup-export");
+    await d.waitText("#toast", "Sauvegarde chiffrée");
+    const archive = readFileSync(app.dirs.backup);
+    assert.equal(archive.subarray(0, 4).toString(), "VDBK");
+    assert.ok(!archive.includes("pamplemousse"), "aucune donnée en clair dans l'archive");
+    await setValue(d, "#backup-pass", "mauvaise phrase", "input");
+    await d.click("#backup-import");
+    await d.waitText("#toast", "incorrecte");
+    await setValue(d, "#backup-pass", "phrase de passe e2e", "input");
+    await d.click("#backup-import");
+    await d.waitText("#toast", "Importé");
+    const convs = await d.exec(() => document.querySelectorAll("#conv-list [data-id]").length);
+    assert.match(await d.text("#toast"), new RegExp(`Importé : \\d+ conversation`));
+    assert.ok(convs > 0, "conversations toujours listées");
+    await d.click("#settings-cancel");
   });
 });

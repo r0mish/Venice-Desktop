@@ -1,7 +1,10 @@
 mod askpass;
 mod audio;
+mod backup;
+mod e2ee;
 mod git;
 mod mcp;
+mod semantic;
 mod shell;
 mod ssh;
 mod storage;
@@ -19,7 +22,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use base64::Engine;
-use tauri::{ipc::Channel, AppHandle, Manager, State};
+use tauri::{ipc::Channel, AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::Notify;
 
@@ -35,6 +38,10 @@ const ENV_API_KEY: &str = "VENICE_API_KEY";
 /// Dictée vocale en cours.
 #[derive(Default)]
 struct Dictation(Mutex<Option<audio::Recording>>);
+
+/// Sessions E2EE vérifiées, par modèle (renouvelées toutes les 30 min).
+#[derive(Default)]
+struct E2eeSessions(Mutex<HashMap<String, Arc<e2ee::Session>>>);
 
 /// Requêtes en cours, annulables depuis l'interface.
 #[derive(Default)]
@@ -124,7 +131,112 @@ fn save_settings(app: AppHandle, settings: Settings) -> CmdResult<()> {
             Err(e) => *vault::LAST_ERROR.lock().unwrap() = Some(e),
         }
     }
-    storage::save_settings(&app, &settings)
+    let shortcut_changed = storage::load_settings(&app).map(|old| old.global_shortcut != settings.global_shortcut).unwrap_or(true);
+    storage::save_settings(&app, &settings)?;
+    if shortcut_changed {
+        apply_shortcut(&app, &settings.global_shortcut)?;
+    }
+    Ok(())
+}
+
+// ------------------------------------------------------------------ raccourci global
+
+/// (Ré)enregistre le raccourci global qui fait apparaître la fenêtre (vide = aucun).
+fn apply_shortcut(app: &AppHandle, accel: &str) -> CmdResult<()> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let gs = app.global_shortcut();
+    gs.unregister_all().map_err(|e| e.to_string())?;
+    let accel = accel.trim();
+    if accel.is_empty() {
+        return Ok(());
+    }
+    gs.register(accel).map_err(|e| format!("Raccourci « {accel} » indisponible (déjà pris ou non pris en charge) : {e}"))
+}
+
+/// Fenêtre affichée au premier plan, nouvelle conversation prête à la saisie.
+fn summon(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        let _ = w.emit("quick-chat", ());
+    }
+}
+
+// ------------------------------------------------------------------ sauvegarde chiffrée
+
+/// Tests de bout en bout (compilation de débogage) : fichier imposé au lieu de la boîte de dialogue native.
+fn e2e_file() -> Option<std::path::PathBuf> {
+    if cfg!(debug_assertions) {
+        std::env::var_os("VENICE_DESKTOP_E2E_FILE").map(Into::into)
+    } else {
+        None
+    }
+}
+
+async fn pick_file(app: &AppHandle, save: bool) -> CmdResult<Option<std::path::PathBuf>> {
+    if let Some(p) = e2e_file() {
+        return Ok(Some(p));
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let dialog = app.dialog().file().add_filter("Sauvegarde Venice Desktop", &["vdbk"]);
+    if save {
+        dialog.set_file_name("venice-desktop.vdbk").save_file(move |p| {
+            let _ = tx.send(p);
+        });
+    } else {
+        dialog.pick_file(move |p| {
+            let _ = tx.send(p);
+        });
+    }
+    match rx.await.map_err(|e| e.to_string())? {
+        Some(p) => p.into_path().map(Some).map_err(|e| e.to_string()),
+        None => Ok(None),
+    }
+}
+
+/// Exporte toutes les données dans une archive chiffrée par phrase de passe. `None` : annulé.
+#[tauri::command]
+async fn export_backup(app: AppHandle, passphrase: String) -> CmdResult<Option<usize>> {
+    if passphrase.chars().count() < backup::MIN_PASSPHRASE {
+        return Err(format!("Phrase de passe trop courte ({} caractères minimum)", backup::MIN_PASSPHRASE));
+    }
+    let Some(path) = pick_file(&app, true).await? else { return Ok(None) };
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let entries = storage::backup_entries(&handle)?;
+        let n = entries.len();
+        std::fs::write(&path, backup::seal(&entries, &passphrase)?).map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(Some(n))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Restaure une sauvegarde ; les données sont rechiffrées avec la clé de cet appareil.
+#[tauri::command]
+async fn import_backup(app: AppHandle, passphrase: String, with_settings: bool) -> CmdResult<Option<storage::ImportReport>> {
+    let Some(path) = pick_file(&app, false).await? else { return Ok(None) };
+    let handle = app.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || -> CmdResult<storage::ImportReport> {
+        let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let entries = backup::open(&data, &passphrase)?;
+        let local = storage::load_settings(&handle)?;
+        let report = storage::restore_entries(&handle, entries, with_settings)?;
+        if report.settings {
+            // Le chiffrement local reste tel quel : il dépend du trousseau de cet appareil.
+            let mut s = storage::load_settings(&handle)?;
+            s.encrypt_data = local.encrypt_data;
+            storage::save_settings(&handle, &s)?;
+        }
+        Ok(report)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    if report.settings {
+        let _ = apply_shortcut(&app, &storage::load_settings(&app)?.global_shortcut);
+    }
+    Ok(Some(report))
 }
 
 /// Active le chiffrement puis chiffre les fichiers existants. Ne crée jamais de nouvelle clé
@@ -215,15 +327,34 @@ async fn chat_stream(
     let key = api_key()?;
     let cancel = Arc::new(Notify::new());
     streams.0.lock().unwrap().insert(request_id.clone(), cancel.clone());
+    // Modèle chiffré de bout en bout : attestation de l'enclave vérifiée avant tout envoi.
+    let session = if request.e2ee { Some(e2ee_session(&app, &settings.base_url, &key, &request.model).await?) } else { None };
+    if let Some(s) = &session {
+        let _ = on_event.send(StreamEvent::E2ee { attestation: s.attestation.clone() });
+    }
     let opts = venice::VeniceOptions {
         web_search_mode: if settings.web_search_mode == "on" { "on" } else { "auto" },
         include_system_prompt: settings.venice_system_prompt,
+        e2ee: session.as_deref(),
     };
     // Recherche web intégrée de Venice ; les autres fournisseurs passent par l'outil web_search.
     let request = ChatRequest { web_search: request.web_search && tools::native_web_search(&settings), ..request };
     let result = venice::chat_stream(&settings.base_url, &key, request, &opts, &on_event, cancel).await;
     streams.0.lock().unwrap().remove(&request_id);
     result
+}
+
+async fn e2ee_session(app: &AppHandle, base: &str, key: &str, model: &str) -> CmdResult<Arc<e2ee::Session>> {
+    let sessions = app.state::<E2eeSessions>();
+    if let Some(s) = sessions.0.lock().unwrap().get(model).filter(|s| s.fresh(model)) {
+        return Ok(s.clone());
+    }
+    let nonce = e2ee::nonce();
+    let v = venice::attestation(base, key, model, &e2ee::nonce_hex(&nonce)).await?;
+    let (model_key, attestation) = e2ee::verify_attestation(&v, &nonce, model)?;
+    let session = Arc::new(e2ee::Session::new(model_key, attestation));
+    sessions.0.lock().unwrap().insert(model.to_owned(), session.clone());
+    Ok(session)
 }
 
 #[tauri::command]
@@ -268,7 +399,7 @@ async fn run_tool(
     let project = ctx.project.as_deref().and_then(|id| storage::load_project(&app, id).ok());
     let cancel = Arc::new(Notify::new());
     streams.0.lock().unwrap().insert(request_id.clone(), cancel.clone());
-    let env = tools::RunEnv { settings: &settings, api_key: api_key(), approved: &approved, hosts: &hosts, mcp: &mcp, cancel: cancel.clone(), project };
+    let env = tools::RunEnv { app: &app, settings: &settings, api_key: api_key(), approved: &approved, hosts: &hosts, mcp: &mcp, cancel: cancel.clone(), project };
     let out = if name == "run_command" {
         // La commande gère elle-même l'annulation (arrêt du groupe de processus).
         tools::run(&ctx, env, &name, &arguments).await
@@ -337,9 +468,21 @@ fn save_project(app: AppHandle, project: storage::Project) -> CmdResult<()> {
 /// Fichiers de référence à joindre pour une question : en entier, ou extraits pertinents (gros projets).
 #[tauri::command]
 async fn project_context(app: AppHandle, id: String, query: String) -> CmdResult<knowledge::ProjectContext> {
-    tauri::async_runtime::spawn_blocking(move || storage::load_project(&app, &id).map(|p| knowledge::context(&p, &query)))
-        .await
-        .map_err(|e| e.to_string())?
+    let p = storage::load_project(&app, &id)?;
+    let settings = storage::load_settings(&app)?;
+    // Recherche sémantique (optionnelle) seulement quand les fichiers ne sont pas joints en entier.
+    let semantic = if semantic::enabled(&settings) && knowledge::total_chars(&p) > knowledge::FULL_CONTEXT_CHARS {
+        match semantic::scores(&app, &settings, &api_key()?, &p, &knowledge::chunks(&p), &query).await {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("recherche sémantique indisponible : {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    tauri::async_runtime::spawn_blocking(move || knowledge::context(&p, &query, semantic.as_deref())).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -926,7 +1069,17 @@ pub fn run() {
     let app = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        summon(app);
+                    }
+                })
+                .build(),
+        )
         .manage(Streams::default())
+        .manage(E2eeSessions::default())
         .manage(Dictation::default())
         .manage(Arc::new(McpManager::default()))
         .setup(|app| {
@@ -940,6 +1093,9 @@ pub fn run() {
                 }
             }
             askpass::start(app.handle().clone());
+            if let Err(e) = storage::load_settings(app.handle()).and_then(|s| apply_shortcut(app.handle(), &s.global_shortcut)) {
+                eprintln!("{e}");
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let mgr = handle.state::<Arc<McpManager>>().inner().clone();
@@ -968,6 +1124,8 @@ pub fn run() {
             export_conversation,
             data_dir,
             chat_stream,
+            export_backup,
+            import_backup,
             cancel_stream,
             tool_definitions,
             preview_tool,

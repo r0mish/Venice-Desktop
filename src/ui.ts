@@ -89,6 +89,7 @@ export function autoModel(kind: "chat" | "code" | "image" | "edit" | "video" | "
 /** Libellé d'un modèle : nom, puis particularités (confidentialité, vision, raisonnement…). */
 export function modelLabel(m: ModelInfo): string {
   const tags = [
+    m.e2ee ? "🔐 E2EE" : "",
     m.privacy === "anonymized" ? "◐ anonymisé" : "",
     m.vision ? "vision" : "",
     m.reasoning ? "raisonnement" : "",
@@ -107,6 +108,7 @@ export function modelTitle(m: ModelInfo | undefined): string {
       : m.privacy === "anonymized"
         ? "◐ Anonymisé : modèle d'un fournisseur tiers, requêtes transmises sans votre identité"
         : "",
+    m.e2ee ? "🔐 Chiffré de bout en bout : seule l'enclave (TEE attestée) peut lire vos messages ; sans outils ni recherche web" : "",
     m.maxContextLength ? `Contexte : ${m.maxContextLength.toLocaleString("fr-FR")} tokens` : "",
     m.price ? `Tarif : ${m.price[0]} $ / ${m.price[1]} $ par million de tokens (entrée / sortie)` : "",
     m.imagePrice ? `Tarif : ${m.imagePrice} $ par image` : "",

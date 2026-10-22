@@ -95,6 +95,12 @@ pub struct Settings {
     pub image_variants: u32,
     /// Chiffrement des conversations, projets et mcp.json (clé dans le trousseau du système).
     pub encrypt_data: bool,
+    /// Recherche sémantique dans les fichiers des projets (morceaux envoyés à l'API d'embeddings).
+    pub semantic_search: bool,
+    /// Modèle d'embeddings (vide = text-embedding-bge-m3).
+    pub embedding_model: String,
+    /// Raccourci global qui affiche la fenêtre (vide = aucun), ex. « CommandOrControl+Shift+Space ».
+    pub global_shortcut: String,
     /// Version du format des réglages, pour les migrations (absent = 0).
     #[serde(default)]
     pub settings_version: u32,
@@ -191,6 +197,9 @@ impl Default for Settings {
             image_edit_model: String::new(),
             image_variants: 1,
             encrypt_data: true,
+            semantic_search: false,
+            embedding_model: String::new(),
+            global_shortcut: "CommandOrControl+Shift+Space".into(),
             settings_version: SETTINGS_VERSION,
         }
     }
@@ -335,7 +344,7 @@ fn secret_files(app: &AppHandle) -> R<Vec<PathBuf>> {
     let mut out = Vec::new();
     for dir in [conv_dir(app)?, projects_dir(app)?, media_dir(app)?] {
         for e in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
-            if matches!(e.path().extension().and_then(|x| x.to_str()), Some("json" | "bin")) {
+            if matches!(e.path().extension().and_then(|x| x.to_str()), Some("json" | "bin" | "emb")) {
                 out.push(e.path());
             }
         }
@@ -673,11 +682,98 @@ pub fn save_project(app: &AppHandle, p: &Project) -> R<()> {
 
 pub fn delete_project(app: &AppHandle, id: &str) -> R<()> {
     check_id(id)?;
-    let path = projects_dir(app)?.join(format!("{id}.json"));
-    if path.exists() {
-        fs::remove_file(&path).map_err(|e| e.to_string())?;
+    for ext in ["json", "emb"] {
+        let path = projects_dir(app)?.join(format!("{id}.{ext}"));
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
+}
+
+// ------------------------------------------------------------------ sauvegarde
+
+/// Fichier local d'une entrée de sauvegarde, et s'il contient des données personnelles
+/// (réécrit chiffré avec la clé locale). `None` : chemin refusé (jamais hors des dossiers prévus).
+fn backup_target(app: &AppHandle, rel: &str) -> R<Option<(PathBuf, bool)>> {
+    let named = |dir: R<PathBuf>, file: &str, ext: &str| -> R<Option<(PathBuf, bool)>> {
+        match file.strip_suffix(ext) {
+            Some(id) if check_id(id).is_ok() => Ok(Some((dir?.join(file), true))),
+            _ => Ok(None),
+        }
+    };
+    let config = || ensure_dir(app.path().app_config_dir().map_err(|e| e.to_string())?);
+    Ok(match rel.split_once('/') {
+        Some(("conversations", f)) if f != "index.json" => named(conv_dir(app), f, ".json")?,
+        Some(("projects", f)) => named(projects_dir(app), f, ".json")?,
+        Some(("media", f)) => named(media_dir(app), f, ".bin")?,
+        Some(("config", "mcp.json")) => Some((mcp_path(app)?, true)),
+        Some(("config", f @ ("settings.json" | "ssh_hosts.json"))) => Some((config()?.join(f), false)),
+        Some(("data", f @ ("workspaces.json" | "usage.json"))) => Some((data_dir(app)?.join(f), false)),
+        _ => None,
+    })
+}
+
+/// Toutes les données à sauvegarder, déchiffrées (l'archive est chiffrée par phrase de passe).
+pub fn backup_entries(app: &AppHandle) -> R<Vec<(String, Vec<u8>)>> {
+    let mut rels = Vec::new();
+    for (prefix, dir) in [("conversations", conv_dir(app)?), ("projects", projects_dir(app)?), ("media", media_dir(app)?)] {
+        for e in fs::read_dir(&dir).map_err(|e| e.to_string())?.flatten() {
+            rels.push(format!("{prefix}/{}", e.file_name().to_string_lossy()));
+        }
+    }
+    rels.extend(["config/mcp.json", "config/settings.json", "config/ssh_hosts.json", "data/workspaces.json", "data/usage.json"].map(String::from));
+    let mut out = Vec::new();
+    for rel in rels {
+        if let Some((path, secret)) = backup_target(app, &rel)? {
+            if path.is_file() {
+                let bytes = if secret { read_secret(&path)? } else { fs::read(&path).map_err(|e| e.to_string())? };
+                out.push((rel, bytes));
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    pub conversations: usize,
+    pub projects: usize,
+    pub media: usize,
+    pub settings: bool,
+}
+
+/// Restaure une sauvegarde : conversations, projets et médias ajoutés (ou remplacés à identifiant égal),
+/// réglages, serveurs SSH, MCP et dossiers autorisés seulement si `with_settings`.
+pub fn restore_entries(app: &AppHandle, entries: Vec<(String, Vec<u8>)>, with_settings: bool) -> R<ImportReport> {
+    let mut report = ImportReport::default();
+    for (rel, bytes) in entries {
+        let Some((path, secret)) = backup_target(app, &rel)? else { continue };
+        match rel.split_once('/').map(|(d, _)| d) {
+            Some("conversations") => report.conversations += 1,
+            Some("projects") => report.projects += 1,
+            Some("media") => report.media += 1,
+            Some("data") if rel == "data/usage.json" && path.exists() => continue,
+            _ if !with_settings => continue,
+            _ => report.settings = true,
+        }
+        if secret { write_secret(&path, &bytes)? } else { write_atomic(&path, &bytes)? }
+    }
+    // L'index des conversations sera reconstruit à la prochaine lecture.
+    let _ = fs::remove_file(index_path(app)?);
+    Ok(report)
+}
+
+/// Index sémantique d'un projet (vecteurs des morceaux), chiffré comme le projet.
+pub fn load_embeddings(app: &AppHandle, id: &str) -> Option<Vec<u8>> {
+    check_id(id).ok()?;
+    read_secret(&projects_dir(app).ok()?.join(format!("{id}.emb"))).ok()
+}
+
+pub fn save_embeddings(app: &AppHandle, id: &str, bytes: &[u8]) -> R<()> {
+    check_id(id)?;
+    write_secret(&projects_dir(app)?.join(format!("{id}.emb")), bytes)
 }
 
 fn ssh_hosts_path(app: &AppHandle) -> R<PathBuf> {

@@ -54,6 +54,9 @@ pub struct ChatRequest {
     pub reasoning_effort: Option<String>,
     /// Personnage public de Venice (`character_slug`).
     pub character_slug: Option<String>,
+    /// Modèle à chiffrement de bout en bout : messages chiffrés pour l'enclave.
+    #[serde(default)]
+    pub e2ee: bool,
 }
 
 /// Options propres à Venice (`venice_parameters`), tirées des réglages.
@@ -62,6 +65,8 @@ pub struct VeniceOptions<'a> {
     pub web_search_mode: &'a str,
     /// Ajouter l'invite système de Venice à la nôtre.
     pub include_system_prompt: bool,
+    /// Session E2EE vérifiée (modèle en enclave) : chiffrement des messages et des réponses.
+    pub e2ee: Option<&'a crate::e2ee::Session>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -82,6 +87,8 @@ pub enum StreamEvent {
     ToolCalls { calls: Vec<ToolCall> },
     /// Sources de la recherche web intégrée (premier morceau du flux).
     Citations { items: Vec<Citation> },
+    /// Conversation chiffrée de bout en bout : attestation de l'enclave vérifiée.
+    E2ee { attestation: crate::e2ee::Attestation },
     /// Nouvel essai après une erreur temporaire (429, 5xx, réseau).
     #[serde(rename_all = "camelCase")]
     Retry { attempt: u32, max_attempts: u32, delay_secs: u64, reason: String },
@@ -295,6 +302,36 @@ fn to_api_message(m: &ChatMessage) -> Value {
     json!({ "role": m.role, "content": parts })
 }
 
+/// Requête E2EE : tous les messages chiffrés pour l'enclave (texte seul, sans outils ni images).
+fn e2ee_body(req: &ChatRequest, session: &crate::e2ee::Session) -> Result<Value, String> {
+    let messages = req
+        .messages
+        .iter()
+        .filter(|m| !(m.content.is_empty() && m.role == "assistant"))
+        .map(|m| {
+            let mut v = json!({ "role": m.role, "content": session.encrypt(&m.content)? });
+            if m.role == "tool" {
+                v["tool_call_id"] = json!(m.tool_call_id);
+            }
+            Ok(v)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut body = json!({
+        "model": req.model,
+        "messages": messages,
+        "stream": true,
+        "stream_options": { "include_usage": true },
+        "venice_parameters": { "enable_e2ee": true, "include_venice_system_prompt": false, "enable_web_search": "off" },
+    });
+    if let Some(t) = req.temperature {
+        body["temperature"] = json!(t);
+    }
+    if let Some(m) = req.max_tokens.filter(|m| *m > 0) {
+        body["max_tokens"] = json!(m);
+    }
+    Ok(body)
+}
+
 pub fn build_body(req: &ChatRequest, base: &str, opts: &VeniceOptions) -> Value {
     let mut body = json!({
         "model": req.model,
@@ -457,17 +494,25 @@ pub async fn chat_stream(
     on_event: &Channel<StreamEvent>,
     cancel: Arc<Notify>,
 ) -> Result<(), String> {
-    let body = build_body(&req, base, opts);
+    let body = match opts.e2ee {
+        Some(s) => e2ee_body(&req, s)?,
+        None => build_body(&req, base, opts),
+    };
     let client = client()?;
     let mut attempt = 0;
     let resp = loop {
         attempt += 1;
-        let send = client
+        let mut post = client
             .post(endpoint(base, "chat/completions"))
             .bearer_auth(key)
-            .header("Accept", "text/event-stream")
-            .json(&body)
-            .send();
+            .header("Accept", "text/event-stream");
+        if let Some(s) = opts.e2ee {
+            post = post
+                .header("X-Venice-TEE-Client-Pub-Key", s.client_pub_hex())
+                .header("X-Venice-TEE-Model-Pub-Key", s.model_pub_hex())
+                .header("X-Venice-TEE-Signing-Algo", "ecdsa");
+        }
+        let send = post.json(&body).send();
         let outcome = tokio::select! {
             r = tokio::time::timeout(FIRST_BYTE_TIMEOUT, send) => r,
             _ = cancel.notified() => {
@@ -564,11 +609,22 @@ pub async fn chat_stream(
             let delta = &choice["delta"];
             for key in ["reasoning_content", "reasoning"] {
                 if let Some(r) = delta[key].as_str().filter(|r| !r.is_empty()) {
-                    let _ = on_event.send(StreamEvent::Reasoning { text: r.to_owned() });
+                    let text = match opts.e2ee {
+                        Some(s) if crate::e2ee::looks_encrypted(r) => s.decrypt(r)?,
+                        _ => r.to_owned(),
+                    };
+                    let _ = on_event.send(StreamEvent::Reasoning { text });
                     break;
                 }
             }
-            emit_content(&delta["content"], &mut splitter, on_event);
+            match (opts.e2ee, delta["content"].as_str()) {
+                // Réponse chiffrée morceau par morceau : déchiffrée ici, jamais exposée en clair au réseau.
+                (Some(s), Some(chunk)) if !chunk.is_empty() => {
+                    let plain = s.decrypt(chunk).map_err(|e| format!("E2EE : {e}"))?;
+                    emit_content(&Value::String(plain), &mut splitter, on_event);
+                }
+                _ => emit_content(&delta["content"], &mut splitter, on_event),
+            }
             for (pos, tc) in delta["tool_calls"].as_array().into_iter().flatten().enumerate() {
                 let idx = tc["index"].as_u64().map(|i| i as usize).unwrap_or(pos);
                 if calls.len() <= idx {
@@ -1028,6 +1084,57 @@ pub async fn transform_image(base: &str, key: &str, data_url: &str, op: ImageOp<
     image_response(resp).await
 }
 
+/// Vecteurs d'embedding des textes, dans l'ordre (recherche sémantique des projets).
+pub async fn embed(base: &str, key: &str, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    let resp = client()?
+        .post(endpoint(base, "embeddings"))
+        .bearer_auth(key)
+        .json(&json!({ "model": model, "input": inputs, "encoding_format": "float" }))
+        .timeout(Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| format!("Connexion impossible : {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Embeddings indisponibles : {}", api_error(resp).await));
+    }
+    let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let mut items: Vec<(usize, Vec<f32>)> = v["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(i, d)| {
+            let idx = d["index"].as_u64().map(|x| x as usize).unwrap_or(i);
+            let vec = d["embedding"].as_array().into_iter().flatten().filter_map(Value::as_f64).map(|x| x as f32).collect();
+            (idx, vec)
+        })
+        .collect();
+    items.sort_by_key(|(i, _)| *i);
+    if items.len() != inputs.len() || items.iter().any(|(_, v)| v.is_empty()) {
+        return Err("Réponse d'embeddings incomplète".into());
+    }
+    Ok(items.into_iter().map(|(_, v)| v).collect())
+}
+
+/// Attestation de l'enclave d'un modèle E2EE, pour notre nonce.
+pub async fn attestation(base: &str, key: &str, model: &str, nonce_hex: &str) -> Result<Value, String> {
+    if !is_venice(base) {
+        return Err("Le chiffrement de bout en bout nécessite l'API Venice.".into());
+    }
+    let resp = client()?
+        .get(endpoint(base, "tee/attestation"))
+        .bearer_auth(key)
+        .query(&[("model", model), ("nonce", nonce_hex)])
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| format!("Connexion impossible : {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("Attestation de l'enclave impossible : {}", api_error(resp).await));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
 /// Solde du compte (USD, DIEM, crédits).
 pub async fn balance(base: &str, key: &str) -> Result<Value, String> {
     if !is_venice(base) {
@@ -1107,8 +1214,9 @@ mod tests {
             web_search: true,
             reasoning_effort: None,
             character_slug: None,
+            e2ee: false,
         };
-        let opts = VeniceOptions { web_search_mode: "auto", include_system_prompt: false };
+        let opts = VeniceOptions { web_search_mode: "auto", include_system_prompt: false, e2ee: None };
         let b = build_body(&req, DEFAULT_BASE_URL, &opts);
         assert_eq!(b["venice_parameters"]["enable_web_search"], "auto");
         assert_eq!(b["venice_parameters"]["enable_web_citations"], true);
@@ -1132,6 +1240,36 @@ mod tests {
         // Serveur tiers : l'effort passe (paramètre OpenAI), pas le reste.
         req.reasoning_effort = Some("low".into());
         assert_eq!(build_body(&req, "http://localhost:8000/v1", &opts)["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn e2ee_body_encrypts_every_message() {
+        use k256::SecretKey;
+        let enclave = SecretKey::random(&mut aes_gcm::aead::OsRng);
+        let session = crate::e2ee::Session::new(
+            enclave.public_key(),
+            crate::e2ee::Attestation { model: "e2ee-m".into(), nonce_bound: true, key_bound: true, debug: false, server_verified: None, tee_provider: None },
+        );
+        let req = ChatRequest {
+            model: "e2ee-m".into(),
+            messages: vec![msg("system", "Consigne secrète"), msg("user", "Question privée"), msg("assistant", "")],
+            temperature: None,
+            max_tokens: None,
+            tools: vec![json!({ "type": "function" })],
+            tool_choice: None,
+            web_search: true,
+            reasoning_effort: None,
+            character_slug: None,
+            e2ee: true,
+        };
+        let b = e2ee_body(&req, &session).unwrap();
+        let msgs = b["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 2, "message assistant vide retiré");
+        assert!(!b.to_string().contains("secrète") && !b.to_string().contains("privée"), "aucun texte en clair");
+        assert_eq!(crate::e2ee::decrypt_with(&enclave, msgs[1]["content"].as_str().unwrap()).unwrap(), "Question privée");
+        assert!(b.get("tools").is_none());
+        assert_eq!(b["venice_parameters"]["enable_e2ee"], true);
+        assert_eq!(b["venice_parameters"]["enable_web_search"], "off");
     }
 
     fn split(chunks: &[&str]) -> (String, String) {

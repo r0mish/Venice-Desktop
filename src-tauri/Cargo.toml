@@ -34,6 +34,15 @@ regex = "1"
 pdf-extract = "0.12"
 cpal = "0.18"
 chacha20poly1305 = "0.10"
+# Chiffrement de bout en bout (E2EE) avec les modèles Venice en enclave TEE.
+k256 = { version = "0.13", features = ["ecdh", "arithmetic"] }
+hkdf = "0.12"
+sha2 = "0.10"
+sha3 = "0.10"
+aes-gcm = "0.10"
+# Sauvegardes chiffrées par phrase de passe.
+argon2 = "0.5"
+tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

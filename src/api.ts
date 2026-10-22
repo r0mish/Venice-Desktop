@@ -72,7 +72,20 @@ export interface Settings {
   /** Images par génération (1 à 4). */
   imageVariants: number;
   encryptData: boolean;
+  /** Recherche sémantique dans les fichiers des projets (API d'embeddings). */
+  semanticSearch: boolean;
+  /** Modèle d'embeddings (vide = text-embedding-bge-m3). */
+  embeddingModel: string;
+  /** Raccourci global qui affiche la fenêtre (vide = aucun). */
+  globalShortcut: string;
   settingsVersion?: number;
+}
+
+export interface ImportReport {
+  conversations: number;
+  projects: number;
+  media: number;
+  settings: boolean;
 }
 
 export interface SystemPromptPreset {
@@ -110,6 +123,16 @@ export interface ModelInfo {
 }
 
 export type MediaMode = "image" | "video" | "music";
+
+/** Attestation de l'enclave vérifiée localement (conversation chiffrée de bout en bout). */
+export interface E2eeAttestation {
+  model: string;
+  nonceBound: boolean;
+  keyBound: boolean;
+  debug: boolean;
+  serverVerified: boolean | null;
+  teeProvider: string | null;
+}
 
 export interface Character {
   slug: string;
@@ -212,6 +235,8 @@ export interface Message {
   /** Message utilisateur : versions (modifications, régénérations) et version affichée. */
   branches?: { content: string; images?: string[]; files?: TextFile[]; tail: Message[] }[];
   branch?: number;
+  /** Réponse chiffrée de bout en bout : attestation vérifiée. */
+  e2ee?: E2eeAttestation;
   /** Vidéo ou audio généré, enregistré localement. */
   media?: { id: string; kind: "video" | "audio"; mime: string; size: number };
   /** Réponse d'un second modèle, affichée à côté (comparaison). */
@@ -325,6 +350,7 @@ export type StreamEvent =
   | { type: "usage"; promptTokens: number; completionTokens: number }
   | { type: "toolCalls"; calls: { id: string; name: string; arguments: string }[] }
   | { type: "citations"; items: Citation[] }
+  | { type: "e2ee"; attestation: E2eeAttestation }
   | { type: "retry"; attempt: number; maxAttempts: number; delaySecs: number; reason: string }
   | { type: "done"; finishReason: string | null; cancelled: boolean };
 
@@ -455,6 +481,9 @@ export const api = {
   deleteConversation: (id: string) => invoke<void>("delete_conversation", { id }),
   exportConversation: (id: string) => invoke<boolean>("export_conversation", { id }),
   dataDir: () => invoke<string>("data_dir"),
+  /** Sauvegarde chiffrée de toutes les données ; null si annulé. */
+  exportBackup: (passphrase: string) => invoke<number | null>("export_backup", { passphrase }),
+  importBackup: (passphrase: string, withSettings: boolean) => invoke<ImportReport | null>("import_backup", { passphrase, withSettings }),
   cancel: (requestId: string) => invoke<void>("cancel_stream", { requestId }),
   platform: () =>
     invoke<{ os: string; shell: string; shellPath: string; shellGuidance: string; version: string; venice: boolean; nativeSearch: boolean }>(
@@ -572,6 +601,8 @@ export const api = {
       webSearch?: boolean;
       reasoningEffort?: string | null;
       characterSlug?: string | null;
+      /** Modèle en enclave : messages chiffrés de bout en bout. */
+      e2ee?: boolean;
     },
     onEvent: (e: StreamEvent) => void,
   ): Promise<void> {

@@ -305,6 +305,7 @@ pub async fn preview(ctx: &ToolContext, approved: &[String], hosts: &[SshHost], 
 }
 
 pub struct RunEnv<'a> {
+    pub app: &'a tauri::AppHandle,
     pub settings: &'a Settings,
     pub api_key: R<String>,
     pub approved: &'a [String],
@@ -367,7 +368,12 @@ async fn run_inner(ctx: &ToolContext, env: RunEnv<'_>, name: &str, arguments: &s
         }
         "search_project_files" => {
             let p = env.project.as_ref().ok_or("Aucun projet associé à cette conversation")?;
-            let found = crate::knowledge::search(p, s(&args, "query")?, crate::knowledge::TOOL_BUDGET);
+            let query = s(&args, "query")?;
+            let semantic = match (&env.api_key, crate::semantic::enabled(env.settings)) {
+                (Ok(key), true) => crate::semantic::scores(env.app, env.settings, key, p, &crate::knowledge::chunks(p), query).await.ok(),
+                _ => None,
+            };
+            let found = crate::knowledge::search(p, query, crate::knowledge::TOOL_BUDGET, semantic.as_deref());
             Ok(text(if found.is_empty() { "Aucun passage ne correspond ; essaie d'autres mots-clés.".into() } else { found }))
         }
         "git_status" => Ok(text(git::status_text(&git::status(&target()?).await?))),

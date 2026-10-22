@@ -2,6 +2,7 @@
 // (SSE) et transcription. Réponses déterministes selon le dernier message utilisateur.
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { attestation, decrypt, enclavePubHex, encryptFor } from "./enclave.mjs";
 
 /** Requêtes reçues, pour les vérifications des tests. */
 export const requests = [];
@@ -13,6 +14,7 @@ const MODELS = [
   { id: "qwen3-coder-e2e", name: "Qwen 3 Coder", traits: ["default_code"], privacy: "private", vision: false, code: true },
   { id: "modele-e2e-vision", name: "Modèle E2E", traits: [], privacy: "private", vision: true, code: false },
   { id: "modele-tiers-e2e", name: "Modèle tiers", traits: [], privacy: "anonymized", vision: true, code: false },
+  { id: "enclave-e2e", name: "Enclave E2E", traits: [], privacy: "private", vision: false, code: false, e2ee: true },
 ];
 
 const lastUser = (messages) => [...messages].reverse().find((m) => m.role === "user");
@@ -65,10 +67,34 @@ function script(req) {
     const found = system.match(/MARQUEUR-\w+/g) ?? [];
     return { content: `Instructions reçues : ${found.join(", ") || "aucune"}` };
   }
+  if (ask.includes("copie de secours")) {
+    return { content: system.includes("NAS est restauré") ? "Passage trouvé : NAS" : "Passage absent" };
+  }
   if (ask.includes("RÉFLÉCHIS")) {
     return { content: "<think>raisonnement caché</think>\n\nConclusion visible." };
   }
   return { content: `Réponse simulée à : ${ask.slice(0, 60)}. Le mot témoin est **pamplemousse** [${req.model}].` };
+}
+
+/** Requête E2EE : messages déchiffrés par l'enclave, réponse chiffrée pour la clé du client. */
+function chatE2ee(req, headers, res) {
+  const clientPub = headers["x-venice-tee-client-pub-key"];
+  if (headers["x-venice-tee-model-pub-key"] !== enclavePubHex || !clientPub) {
+    return res.writeHead(400).end(JSON.stringify({ error: "clés TEE absentes ou inconnues" }));
+  }
+  let plain;
+  try {
+    plain = { ...req, messages: req.messages.map((m) => ({ ...m, content: decrypt(m.content) })) };
+  } catch {
+    return res.writeHead(400).end(JSON.stringify({ error: "message non chiffré pour l'enclave" }));
+  }
+  requests.at(-1).decrypted = plain.messages;
+  const parts = script(plain).content.match(/.{1,16}/gsu) ?? [""];
+  sse(res, [
+    ...parts.map((p) => ({ choices: [{ index: 0, delta: { content: encryptFor(clientPub, p) }, finish_reason: null }] })),
+    { choices: [{ index: 0, delta: { content: "" }, finish_reason: "stop" }] },
+    { choices: [], usage: { prompt_tokens: 50, completion_tokens: 10, total_tokens: 60 } },
+  ]);
 }
 
 function sse(res, chunks) {
@@ -114,6 +140,7 @@ const modelJson = (m) => ({
     traits: m.traits,
     capabilities: {
       supportsVision: m.vision,
+      supportsE2EE: !!m.e2ee,
       supportsFunctionCalling: true,
       optimizedForCode: m.code,
       supportsReasoning: m.traits.includes("default"),
@@ -192,9 +219,21 @@ export function startMock(port = 0) {
         res.writeHead(200, { "Content-Type": "audio/mpeg" });
         return res.end(Buffer.alloc(16));
       }
+      if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+        const parsed = JSON.parse(body);
+        requests.push({ path: url.pathname, model: parsed.model, count: parsed.input.length });
+        // Vecteurs « sémantiques » simulés : sauvegarde ≈ NAS, sans mot commun.
+        const vec = (t) => [/NAS|copie de secours/.test(t) ? 1 : 0, /météo/.test(t) ? 1 : 0, 0.1];
+        return json(200, { object: "list", data: parsed.input.map((t, index) => ({ object: "embedding", index, embedding: vec(t) })) });
+      }
+      if (req.method === "GET" && url.pathname === "/v1/tee/attestation") {
+        requests.push({ path: url.pathname, model: url.searchParams.get("model") });
+        return json(200, attestation(url.searchParams.get("model"), url.searchParams.get("nonce")));
+      }
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
         const parsed = JSON.parse(body);
         requests.push({ auth: req.headers.authorization, ...parsed });
+        if (parsed.venice_parameters?.enable_e2ee) return chatE2ee(parsed, req.headers, res);
         return chat(parsed, res);
       }
       if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {

@@ -29,8 +29,10 @@ export async function launch(prepare = () => {}, { keepHome = false } = {}) {
     VENICE_API_KEY: "cle-e2e",
     // Build de développement : le faux serveur local est traité comme l'API Venice.
     VENICE_DESKTOP_E2E_HOST: "127.0.0.1",
+    // Build de développement : sauvegarde chiffrée écrite/lue ici au lieu de la boîte de dialogue.
+    VENICE_DESKTOP_E2E_FILE: join(root, "sauvegarde.vdbk"),
   };
-  const dirs = { root, config: join(env.XDG_CONFIG_HOME, ID), data: join(env.XDG_DATA_HOME, ID) };
+  const dirs = { root, config: join(env.XDG_CONFIG_HOME, ID), data: join(env.XDG_DATA_HOME, ID), backup: env.VENICE_DESKTOP_E2E_FILE };
   for (const dir of [env.HOME, dirs.config, dirs.data]) mkdirSync(dir, { recursive: true });
   writeFileSync(
     join(dirs.config, "settings.json"),

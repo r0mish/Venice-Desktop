@@ -244,7 +244,11 @@
                 </select>
               </label>
               <label class="check"><input id="s-enter" type="checkbox" /> Entrée pour envoyer (Maj+Entrée = retour ligne)</label>
+              <label>Raccourci global (fenêtre + nouvelle conversation)
+                <input id="s-shortcut" spellcheck="false" placeholder="CommandOrControl+Shift+Space" />
+              </label>
             </div>
+            <p class="muted small">Fonctionne même quand l'application est en arrière-plan. Vide = désactivé. Sous Wayland, les raccourcis globaux peuvent être bloqués par le bureau.</p>
           </fieldset>
 
           <fieldset>
@@ -259,6 +263,19 @@
             <div class="row" id="vault-key-row" hidden>
               <input id="vault-key" spellcheck="false" autocomplete="off" class="mono" />
               <button type="button" id="vault-key-action" class="btn-primary sm">Copier</button>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Sauvegarde chiffrée</legend>
+            <p class="muted small">Toutes les conversations, projets, médias générés et réglages dans un seul fichier <code>.vdbk</code>, chiffré par une phrase de passe (Argon2id + XChaCha20-Poly1305) : pour changer d'ordinateur ou garder une copie hors ligne. La clé API n'est jamais incluse.</p>
+            <label>Phrase de passe (12 caractères minimum)
+              <input id="backup-pass" type="password" autocomplete="new-password" spellcheck="false" />
+            </label>
+            <label class="check"><input id="backup-settings" type="checkbox" /> À l'import, remplacer aussi les réglages, serveurs SSH, MCP et dossiers autorisés</label>
+            <div class="row">
+              <button type="button" id="backup-export" class="btn-ghost sm">Exporter…</button>
+              <button type="button" id="backup-import" class="btn-ghost sm">Importer…</button>
             </div>
           </fieldset>
 
@@ -304,6 +321,14 @@
             </label>
             <p class="muted small">Avec Brave, Google ou SearXNG, le modèle formule lui-même ses requêtes (outil <code>web_search</code>) et peut en lancer plusieurs. SearXNG : activez le format JSON (<code>search.formats: [html, json]</code> dans settings.yml). Les pages lues par <code>fetch_url</code> sont téléchargées depuis votre machine ; les adresses du réseau local sont bloquées.</p>
             <label class="check"><input id="s-web-default" type="checkbox" /> Activer la recherche web par défaut</label>
+          </fieldset>
+          <fieldset>
+            <legend>Fichiers des projets</legend>
+            <label class="check"><input id="s-semantic" type="checkbox" /> Recherche sémantique dans les gros fichiers de référence (en plus de la recherche par mots-clés)</label>
+            <label>Modèle d'embeddings
+              <input id="s-embedding-model" spellcheck="false" placeholder="text-embedding-bge-m3" />
+            </label>
+            <p class="muted small">Trouve les passages qui répondent à la question même sans mot commun. Les morceaux des fichiers sont envoyés une fois à l'API d'embeddings de Venice (sans conservation), puis l'index est gardé chiffré sur cet appareil ; seuls les morceaux modifiés sont renvoyés. Désactivé : tout reste local (BM25).</p>
           </fieldset>
           <fieldset>
             <legend>Génération d'images</legend>

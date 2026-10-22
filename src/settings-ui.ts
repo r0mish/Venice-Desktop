@@ -73,6 +73,11 @@ const s = {
   sttUrl: $<HTMLInputElement>("#s-stt-url"),
   sttVocab: $<HTMLTextAreaElement>("#s-stt-vocab"),
   encrypt: $<HTMLInputElement>("#s-encrypt"),
+  shortcut: $<HTMLInputElement>("#s-shortcut"),
+  semantic: $<HTMLInputElement>("#s-semantic"),
+  embeddingModel: $<HTMLInputElement>("#s-embedding-model"),
+  backupPass: $<HTMLInputElement>("#backup-pass"),
+  backupSettings: $<HTMLInputElement>("#backup-settings"),
   vaultStatus: $("#vault-status"),
   vaultKeyRow: $("#vault-key-row"),
   vaultKey: $<HTMLInputElement>("#vault-key"),
@@ -403,6 +408,48 @@ async function renderVaultStatus() {
         : "Chiffrement désactivé.";
 }
 
+// ---------------------------------------------------------------- sauvegarde chiffrée
+
+async function backup(action: "export" | "import", btn: HTMLButtonElement) {
+  const pass = s.backupPass.value;
+  if (pass.length < 12) {
+    toast("Phrase de passe : 12 caractères minimum", true);
+    return s.backupPass.focus();
+  }
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = action === "export" ? "Chiffrement…" : "Déchiffrement…";
+  try {
+    if (action === "export") {
+      const n = await api.exportBackup(pass);
+      if (n != null) toast(`Sauvegarde chiffrée : ${n} fichier(s)`);
+    } else {
+      const r = await api.importBackup(pass, s.backupSettings.checked);
+      if (!r) return;
+      const msg = `Importé : ${r.conversations} conversation(s), ${r.projects} projet(s), ${r.media} média(s)${r.settings ? ", réglages" : ""}`;
+      if (r.settings) {
+        // Réglages remplacés : rechargement complet de l'interface.
+        try {
+          sessionStorage.setItem("toast", msg);
+        } catch {}
+        return location.reload();
+      }
+      toast(msg);
+      await refreshConvs();
+      await loadProjects();
+      renderSidebar();
+    }
+    s.backupPass.value = "";
+  } catch (e) {
+    toast(errMsg(e), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+$<HTMLButtonElement>("#backup-export").addEventListener("click", (e) => backup("export", e.currentTarget as HTMLButtonElement));
+$<HTMLButtonElement>("#backup-import").addEventListener("click", (e) => backup("import", e.currentTarget as HTMLButtonElement));
+
 let vaultMode: "copy" | "restore" = "copy";
 $("#vault-show").addEventListener("click", async () => {
   try {
@@ -491,6 +538,10 @@ export async function openSettings(tab = "general") {
   s.sttUrl.value = st.transcriptionUrl ?? "";
   s.sttVocab.value = st.transcriptionVocabulary ?? "";
   s.encrypt.checked = st.encryptData !== false;
+  s.shortcut.value = st.globalShortcut ?? "";
+  s.semantic.checked = !!st.semanticSearch;
+  s.embeddingModel.value = st.embeddingModel ?? "";
+  s.backupPass.value = "";
   s.vaultKeyRow.hidden = true;
   renderVaultStatus();
   renderShellInfo();
@@ -584,6 +635,9 @@ $("#settings-form").addEventListener("submit", async (e) => {
     transcriptionUrl: s.sttUrl.value.trim(),
     transcriptionVocabulary: s.sttVocab.value,
     encryptData: s.encrypt.checked,
+    globalShortcut: s.shortcut.value.trim(),
+    semanticSearch: s.semantic.checked,
+    embeddingModel: s.embeddingModel.value.trim(),
   };
   try {
     next.prices = parsePrices(s.prices.value);

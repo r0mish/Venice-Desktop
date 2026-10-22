@@ -57,6 +57,15 @@ export async function send() {
     );
     return;
   }
+  if (!media && modelInfo(model)?.e2ee && (images.length || o.kind === "code")) {
+    toast(
+      o.kind === "code"
+        ? "Les modèles chiffrés de bout en bout (🔐) n'ont pas accès aux outils : choisissez un autre modèle pour l'agent de code."
+        : "Les modèles chiffrés de bout en bout (🔐) n'acceptent que du texte : retirez les images.",
+      true,
+    );
+    return;
+  }
   if (!media && images.length && modelInfo(model)?.vision === false) {
     toast(`Le modèle ${model} ne gère pas les images : choisissez un modèle marqué « vision ».`, true);
     return;
@@ -269,7 +278,8 @@ async function streamTurn(conv: Conversation, msg: Message, tools: Awaited<Retur
   const requestId = uid();
   if (state.busy) Object.assign(state.busy, { requestId, msgId: msg.id });
   const messages = toApiMessages({ ...conv, messages: conv.messages.filter((m) => m !== msg) }, sysPrompt(conv));
-  setActivity("Envoi de la requête…", conv.model);
+  const e2ee = !!modelInfo(conv.model)?.e2ee;
+  setActivity(e2ee ? "Vérification de l'enclave et chiffrement…" : "Envoi de la requête…", conv.model);
   let ok = true;
   try {
     await api.chat(
@@ -279,13 +289,19 @@ async function streamTurn(conv: Conversation, msg: Message, tools: Awaited<Retur
         messages,
         temperature: state.settings.temperature,
         maxTokens: state.settings.maxTokens,
-        tools: tools.map((t) => t.definition),
-        webSearch: !!conv.webSearch,
+        // Chiffrement de bout en bout : l'enclave ne reçoit ni outils ni recherche web.
+        tools: e2ee ? [] : tools.map((t) => t.definition),
+        webSearch: !e2ee && !!conv.webSearch,
+        e2ee,
         reasoningEffort: conv.reasoningEffort || null,
         characterSlug: conv.kind === "chat" ? (conv.character?.slug ?? null) : null,
       },
       (ev) => {
         switch (ev.type) {
+          case "e2ee":
+            msg.e2ee = ev.attestation;
+            setActivity("Enclave vérifiée", "chiffrement de bout en bout");
+            break;
           case "citations":
             msg.citations = ev.items;
             setActivity("Recherche web…", `${ev.items.length} source(s)`);
@@ -357,7 +373,8 @@ async function streamCompare(conv: Conversation, msg: Message, model: string) {
         temperature: state.settings.temperature,
         maxTokens: state.settings.maxTokens,
         tools: [],
-        webSearch: !!conv.webSearch,
+        webSearch: !!conv.webSearch && !modelInfo(model)?.e2ee,
+        e2ee: !!modelInfo(model)?.e2ee,
         characterSlug: conv.character?.slug ?? null,
       },
       (ev) => {

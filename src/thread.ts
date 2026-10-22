@@ -122,7 +122,7 @@ function messageHtml(m: Message, next: Message | undefined): string {
   const body = m.content
     ? renderMarkdown(withCitationLinks(m.content, m.citations))
     : streaming && !m.reasoning && !tools ? '<span class="typing"><i></i><i></i><i></i></span>' : "";
-  const meta = [m.model, m.usage ? `${m.usage.promptTokens} → ${m.usage.completionTokens} tokens` : "", m.seed != null ? `graine ${m.seed}` : "", m.blurred ? "floutée (mode sûr)" : "", m.cancelled ? "interrompu" : ""]
+  const meta = [m.model, m.e2ee ? "🔐 chiffré de bout en bout" : "", m.usage ? `${m.usage.promptTokens} → ${m.usage.completionTokens} tokens` : "", m.seed != null ? `graine ${m.seed}` : "", m.blurred ? "floutée (mode sûr)" : "", m.cancelled ? "interrompu" : ""]
     .filter(Boolean)
     .join(" · ");
   const error = m.error
