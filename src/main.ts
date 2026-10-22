@@ -15,6 +15,8 @@ import { renderUsage, stop } from "./run";
 import { openSettings, pollMcp, refreshKeyStatus } from "./settings-ui";
 import { initUpdates } from "./updates-ui";
 import { initLightbox } from "./lightbox";
+import { initTemplates } from "./templates-ui";
+import { checkBudget } from "./budget";
 import "./attachments";
 
 $("#open-settings").addEventListener("click", () => openSettings());
@@ -90,6 +92,7 @@ async function init() {
   });
   initDictation({ input: el.input, toast });
   initLightbox({ toast });
+  initTemplates();
   initGitUi({
     workspace: () => (opts().kind === "code" ? opts().workspace : undefined),
     model: () => state.selectedModel || state.settings.codeModel,
@@ -112,6 +115,7 @@ async function init() {
   el.input.focus();
   await loadModels();
   renderUsage();
+  checkBudget(true);
   await initUpdates();
 }
 

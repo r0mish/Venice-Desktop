@@ -93,7 +93,8 @@ export function systemPrompt(conv: Conversation, settings: Settings, platform: P
     if (conv.systemAccess) parts.push(SYSTEM_ACCESS_PROMPT);
   }
   if (extras.project) parts.push(projectPrompt(extras.project, extras.projectFiles));
-  const user = promptText(conv, settings).trim();
+  // Un personnage Venice remplace les instructions de l'utilisateur.
+  const user = conv.kind === "chat" && conv.character ? "" : promptText(conv, settings).trim();
   if (user) parts.push(user);
   if (conv.webSearch) parts.push(WEB_PROMPT(!!extras.nativeSearch));
   return parts.join("\n\n");

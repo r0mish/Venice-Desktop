@@ -134,6 +134,53 @@ test("application de bout en bout", async (t) => {
     await idle(d);
   });
 
+  await step(t, "effort de raisonnement et personnage Venice", async () => {
+    await d.click("#new-chat");
+    await setValue(d, "#prompt-select", "");
+    await d.waitVisible("#effort-select");
+    await setValue(d, "#effort-select", "high");
+    await send("Question avec effort élevé");
+    await d.waitText("#messages", "pamplemousse");
+    await idle(d);
+    assert.equal(requests.at(-1).reasoning_effort, "high");
+    await setValue(d, "#effort-select", "off");
+    await send("Question sans réflexion");
+    await idle(d);
+    assert.equal(requests.at(-1).venice_parameters.disable_thinking, true);
+    assert.equal(requests.at(-1).reasoning_effort, undefined);
+    await setValue(d, "#prompt-select", "__char");
+    await d.waitFor(() => document.querySelector("#char-dialog").open, { message: "recherche de personnages" });
+    await d.type("#char-search", "coach");
+    await d.waitText("#char-list", "Coach E2E");
+    await d.waitFor(() => document.querySelectorAll("#char-list .char-item").length === 1, { message: "filtrage" });
+    await d.click("#char-list .char-item");
+    await d.waitFor(() => document.querySelector("#prompt-select").selectedOptions[0]?.textContent.includes("Coach E2E"), { message: "personnage affiché" });
+    await send("Bonjour coach");
+    await idle(d);
+    assert.equal(requests.at(-1).venice_parameters.character_slug, "coach-e2e");
+  });
+
+  await step(t, "modèles de messages et alerte de solde", async () => {
+    await d.click("#open-settings");
+    await d.waitFor(() => document.querySelector("#settings").open, { message: "réglages ouverts" });
+    await d.click("#s-template-add");
+    await d.type("#s-templates .prompt-row:last-child [data-f=name]", "resume");
+    await d.type("#s-templates .prompt-row:last-child [data-f=text]", "Résume en 3 points :");
+    await d.click('.settings-tabs [data-tab="usage"]');
+    await d.type("#s-balance-alert", "5");
+    await d.click("#settings-save");
+    await d.waitFor(() => !document.querySelector("#settings").open, { message: "réglages enregistrés" });
+    await d.click("#new-chat");
+    await d.type("#input", "/res");
+    await d.waitVisible("#slash-menu");
+    await d.waitText("#slash-menu", "/resume");
+    await d.exec(() => document.querySelector("#input").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    assert.equal(await d.exec(() => document.querySelector("#input").value), "Résume en 3 points :");
+    await send(" ce texte.");
+    await idle(d);
+    await d.waitText("#toast", "Solde Venice bas");
+  });
+
   await step(t, "raisonnement <think> séparé de la réponse", async () => {
     await send("RÉFLÉCHIS puis conclus");
     await d.waitText("#messages", "Conclusion visible.");

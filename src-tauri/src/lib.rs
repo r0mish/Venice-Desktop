@@ -663,6 +663,12 @@ async fn speak(app: AppHandle, text: String) -> CmdResult<String> {
 }
 
 #[tauri::command]
+async fn list_characters(app: AppHandle, search: String) -> CmdResult<Vec<venice::Character>> {
+    let settings = storage::load_settings(&app)?;
+    venice::characters(&settings.base_url, &api_key()?, &search).await
+}
+
+#[tauri::command]
 async fn account_balance(app: AppHandle) -> CmdResult<serde_json::Value> {
     let settings = storage::load_settings(&app)?;
     venice::balance(&settings.base_url, &api_key()?).await
@@ -839,6 +845,7 @@ pub fn run() {
             save_image,
             speak,
             account_balance,
+            list_characters,
             mcp_get_config,
             mcp_save_config,
             mcp_restart,

@@ -64,6 +64,7 @@
             <option value="auto">Autonome</option>
           </select>
           <select id="prompt-select" title="Instructions système" hidden></select>
+          <select id="effort-select" title="Effort de raisonnement" hidden></select>
           <select id="conv-project" title="Projet de la conversation" hidden></select>
           <select id="model-select" title="Modèle"></select>
           <button id="export-btn" class="icon-btn" title="Exporter en Markdown" hidden>
@@ -76,6 +77,7 @@
         <footer id="composer-wrap">
           <div id="activity" class="activity" hidden></div>
           <div id="ws-menu" class="ws-menu" hidden></div>
+          <div id="slash-menu" class="ws-menu slash-menu" hidden></div>
           <form id="composer">
             <div id="attachments"></div>
             <textarea id="input" rows="1" placeholder="Écrivez à Venice…" autocomplete="off" spellcheck="true"></textarea>
@@ -193,6 +195,13 @@
             <p class="muted small">Enregistrez plusieurs jeux d'instructions (rôle, ton, format…) et choisissez-les pour chaque conversation dans le menu en haut de la fenêtre. Celui marqué « par défaut » s'applique aux nouvelles conversations.</p>
             <div id="s-prompts"></div>
             <button type="button" id="s-prompt-add" class="btn-ghost sm">+ Ajouter des instructions</button>
+          </fieldset>
+
+          <fieldset>
+            <legend>Modèles de messages</legend>
+            <p class="muted small">Textes réutilisables : tapez <code>/</code> dans la zone de saisie, puis le début du nom, et validez par Entrée.</p>
+            <div id="s-templates"></div>
+            <button type="button" id="s-template-add" class="btn-ghost sm">+ Ajouter un modèle</button>
           </fieldset>
 
           <fieldset>
@@ -440,6 +449,15 @@
               <span class="muted small" id="balance"></span>
               <button type="button" id="balance-refresh" class="btn-ghost sm">Afficher le solde</button>
             </div>
+            <div class="grid2">
+              <label>Alerte si le solde descend sous ($)
+                <input id="s-balance-alert" type="number" min="0" step="0.5" placeholder="aucune alerte" />
+              </label>
+              <label>Budget mensuel estimé ($)
+                <input id="s-budget" type="number" min="0" step="1" placeholder="aucun budget" />
+              </label>
+            </div>
+            <p class="muted small">Le solde est vérifié au plus toutes les 10 minutes après vos échanges ; le budget compare les coûts estimés du mois en cours (alerte à 80 % et 100 %).</p>
           </fieldset>
           <fieldset>
             <legend>Tarifs personnalisés ($ par million de tokens, facultatif)</legend>
@@ -565,6 +583,20 @@
           <button type="submit" class="btn-primary" id="p-save">Enregistrer</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="char-dialog">
+      <div class="char-wrap">
+        <div class="settings-head">
+          <h2>Personnages Venice</h2>
+        </div>
+        <input id="char-search" type="search" placeholder="Rechercher (nom, description, #étiquette)…" autocomplete="off" />
+        <div id="char-list"></div>
+        <p class="muted small">Le personnage remplace l'invite de Venice pour cette conversation ; vos instructions ne s'appliquent plus tant qu'il est choisi.</p>
+        <div class="dialog-actions">
+          <button type="button" class="btn-ghost" id="char-cancel">Fermer</button>
+        </div>
+      </div>
     </dialog>
 
     <dialog id="lightbox" aria-label="Image">

@@ -50,6 +50,10 @@ pub struct ChatRequest {
     /// Recherche web intégrée de Venice demandée pour cette requête.
     #[serde(default)]
     pub web_search: bool,
+    /// Effort de raisonnement (« low », « high »…) ; « off » désactive la réflexion.
+    pub reasoning_effort: Option<String>,
+    /// Personnage public de Venice (`character_slug`).
+    pub character_slug: Option<String>,
 }
 
 /// Options propres à Venice (`venice_parameters`), tirées des réglages.
@@ -95,6 +99,11 @@ pub struct ModelInfo {
     /// Appels d'outils (agent de code, MCP, recherche par outil).
     pub tools: bool,
     pub reasoning: bool,
+    /// Niveaux d'effort de raisonnement acceptés (vide = non réglable).
+    pub reasoning_efforts: Vec<String>,
+    pub default_effort: Option<String>,
+    /// Chiffrement de bout en bout possible (TEE attesté).
+    pub e2ee: bool,
     pub code: bool,
     pub max_context_length: Option<u64>,
     /// « private » (aucune conservation chez Venice) ou « anonymized » (fournisseur tiers).
@@ -111,6 +120,9 @@ pub struct ModelInfo {
     /// Modèles d'image : prix d'une génération en $.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_price: Option<f64>,
+    /// Modèles vidéo, musique, voix : spécification brute (durées, voix, formats…).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec: Option<Value>,
 }
 
 /// Délai max avant les en-têtes de réponse, puis entre deux morceaux du flux.
@@ -200,6 +212,13 @@ fn model_info(m: &Value) -> Option<ModelInfo> {
         vision: caps["supportsVision"].as_bool().unwrap_or(!known),
         tools: caps["supportsFunctionCalling"].as_bool().unwrap_or(!known),
         reasoning: caps["supportsReasoning"].as_bool().unwrap_or(false),
+        reasoning_efforts: if caps["supportsReasoningEffort"].as_bool().unwrap_or(false) {
+            caps["reasoningEffortOptions"].as_array().into_iter().flatten().filter_map(|e| e.as_str().map(str::to_owned)).collect()
+        } else {
+            Vec::new()
+        },
+        default_effort: caps["defaultReasoningEffort"].as_str().map(str::to_owned),
+        e2ee: caps["supportsE2EE"].as_bool().unwrap_or(false),
         code: caps["optimizedForCode"].as_bool().unwrap_or(false),
         max_context_length: spec["availableContextTokens"].as_u64().or_else(|| m["context_length"].as_u64()),
         privacy: spec["privacy"].as_str().map(str::to_owned),
@@ -210,6 +229,7 @@ fn model_info(m: &Value) -> Option<ModelInfo> {
         price: price(&spec["pricing"]["input"]).zip(price(&spec["pricing"]["output"])).map(|(i, o)| [i, o]),
         constraints: spec.get("constraints").filter(|c| c.is_object()).cloned(),
         image_price: price(&spec["pricing"]["generation"]),
+        spec: (m["type"].as_str().is_some_and(|t| t != "text" && t != "image") && spec.is_object()).then(|| spec.clone()),
     })
 }
 
@@ -299,6 +319,15 @@ pub fn build_body(req: &ChatRequest, base: &str, opts: &VeniceOptions) -> Value 
             "enable_web_search": if web { opts.web_search_mode } else { "off" },
             "enable_web_citations": web,
         });
+        if req.reasoning_effort.as_deref() == Some("off") {
+            body["venice_parameters"]["disable_thinking"] = json!(true);
+        }
+        if let Some(slug) = req.character_slug.as_deref().filter(|s| !s.is_empty()) {
+            body["venice_parameters"]["character_slug"] = json!(slug);
+        }
+    }
+    if let Some(effort) = req.reasoning_effort.as_deref().filter(|e| !e.is_empty() && *e != "off") {
+        body["reasoning_effort"] = json!(effort);
     }
     body
 }
@@ -765,6 +794,55 @@ pub async fn generate_image(base: &str, key: &str, r: &ImageRequest, cancel: Arc
     Ok(ImageResult { images, blurred, seconds: v["timing"]["total"].as_f64().map(|ms| ms / 1000.0) })
 }
 
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Character {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub tags: Vec<String>,
+    pub adult: bool,
+    pub model_id: Option<String>,
+}
+
+/// Personnages publics de Venice (recherche par nom, description ou étiquette).
+pub async fn characters(base: &str, key: &str, search: &str) -> Result<Vec<Character>, String> {
+    if !is_venice(base) {
+        return Err("Les personnages nécessitent l'API Venice".into());
+    }
+    let mut query = vec![("limit", "60".to_string()), ("sortBy", "imports".to_string())];
+    if !search.trim().is_empty() {
+        query.push(("search", search.trim().chars().take(200).collect()));
+    }
+    let resp = client()?
+        .get(endpoint(base, "characters"))
+        .bearer_auth(key)
+        .query(&query)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("Connexion impossible : {e}"))?;
+    if !resp.status().is_success() {
+        return Err(api_error(resp).await);
+    }
+    let v: Value = resp.json().await.map_err(|e| e.to_string())?;
+    Ok(v["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            Some(Character {
+                slug: c["slug"].as_str()?.to_owned(),
+                name: c["name"].as_str().unwrap_or_default().to_owned(),
+                description: c["description"].as_str().unwrap_or_default().chars().take(300).collect(),
+                tags: c["tags"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_owned)).take(6).collect(),
+                adult: c["adult"].as_bool().unwrap_or(false),
+                model_id: c["modelId"].as_str().map(str::to_owned),
+            })
+        })
+        .collect())
+}
+
 /// Solde du compte (USD, DIEM, crédits).
 pub async fn balance(base: &str, key: &str) -> Result<Value, String> {
     if !is_venice(base) {
@@ -842,6 +920,8 @@ mod tests {
             tools: vec![],
             tool_choice: None,
             web_search: true,
+            reasoning_effort: None,
+            character_slug: None,
         };
         let opts = VeniceOptions { web_search_mode: "auto", include_system_prompt: false };
         let b = build_body(&req, DEFAULT_BASE_URL, &opts);
@@ -853,6 +933,20 @@ mod tests {
         assert!(build_body(&req, "http://localhost:8000/v1", &opts).get("venice_parameters").is_none());
         req.web_search = false;
         assert_eq!(build_body(&req, DEFAULT_BASE_URL, &opts)["venice_parameters"]["enable_web_search"], "off");
+        // Effort de raisonnement, réflexion désactivée, personnage.
+        req.reasoning_effort = Some("high".into());
+        req.character_slug = Some("alan-watts".into());
+        let b = build_body(&req, DEFAULT_BASE_URL, &opts);
+        assert_eq!(b["reasoning_effort"], "high");
+        assert_eq!(b["venice_parameters"]["character_slug"], "alan-watts");
+        assert!(b["venice_parameters"].get("disable_thinking").is_none());
+        req.reasoning_effort = Some("off".into());
+        let b = build_body(&req, DEFAULT_BASE_URL, &opts);
+        assert_eq!(b["venice_parameters"]["disable_thinking"], true);
+        assert!(b.get("reasoning_effort").is_none());
+        // Serveur tiers : l'effort passe (paramètre OpenAI), pas le reste.
+        req.reasoning_effort = Some("low".into());
+        assert_eq!(build_body(&req, "http://localhost:8000/v1", &opts)["reasoning_effort"], "low");
     }
 
     fn split(chunks: &[&str]) -> (String, String) {

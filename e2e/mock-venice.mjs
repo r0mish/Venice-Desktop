@@ -110,7 +110,15 @@ const modelJson = (m) => ({
     availableContextTokens: 128000,
     privacy: m.privacy,
     traits: m.traits,
-    capabilities: { supportsVision: m.vision, supportsFunctionCalling: true, optimizedForCode: m.code, supportsReasoning: false },
+    capabilities: {
+      supportsVision: m.vision,
+      supportsFunctionCalling: true,
+      optimizedForCode: m.code,
+      supportsReasoning: m.traits.includes("default"),
+      supportsReasoningEffort: m.traits.includes("default"),
+      reasoningEffortOptions: ["low", "medium", "high"],
+      defaultReasoningEffort: "medium",
+    },
     pricing: { input: { usd: 0.5, diem: 0.5 }, output: { usd: 2, diem: 2 } },
   },
 });
@@ -143,6 +151,17 @@ export function startMock(port = 0) {
         const parsed = JSON.parse(body);
         requests.push({ auth: req.headers.authorization, path: url.pathname, ...parsed });
         return json(200, { id: "generate-image-e2e", images: [PIXEL], timing: { inferenceDuration: 1, inferencePreprocessingTime: 0, inferenceQueueTime: 0, total: 1200 } });
+      }
+      if (req.method === "GET" && url.pathname === "/v1/characters") {
+        const all = [
+          { slug: "alan-watts", name: "Alan Watts", description: "Philosophe", tags: ["philosophie"], adult: false, modelId: "zai-org-glm-5-1" },
+          { slug: "coach-e2e", name: "Coach E2E", description: "Coach sportif", tags: ["sport"], adult: false, modelId: "zai-org-glm-5-1" },
+        ];
+        const q = (url.searchParams.get("search") ?? "").toLowerCase();
+        return json(200, { object: "list", data: all.filter((c) => !q || c.name.toLowerCase().includes(q)) });
+      }
+      if (req.method === "GET" && url.pathname === "/v1/billing/balance") {
+        return json(200, { canConsume: true, consumptionCurrency: "USD", balances: { usd: 2.5, diem: null, bundledCredits: null, earnedCredits: null }, diemEpochAllocation: 0 });
       }
       if (req.method === "POST" && url.pathname === "/v1/audio/speech") {
         res.writeHead(200, { "Content-Type": "audio/mpeg" });

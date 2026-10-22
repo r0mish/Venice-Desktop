@@ -10,6 +10,12 @@ export interface Settings {
   systemPrompts: SystemPromptPreset[];
   /** Instructions des nouvelles conversations (id ; vide = aucune). */
   defaultPrompt: string;
+  /** Modèles de messages, insérés en tapant « / ». */
+  promptTemplates: SystemPromptPreset[];
+  /** Alerte quand le solde USD passe sous ce montant. */
+  balanceAlert: number | null;
+  /** Budget mensuel estimé ($). */
+  monthlyBudget: number | null;
   temperature: number | null;
   maxTokens: number | null;
   theme: "system" | "light" | "dark";
@@ -71,6 +77,11 @@ export interface ModelInfo {
   vision: boolean;
   tools: boolean;
   reasoning: boolean;
+  /** Niveaux d'effort de raisonnement acceptés (vide = non réglable). */
+  reasoningEfforts: string[];
+  defaultEffort: string | null;
+  /** Chiffrement de bout en bout possible. */
+  e2ee: boolean;
   code: boolean;
   maxContextLength: number | null;
   /** private : exécuté par Venice sans conservation ; anonymized : fournisseur tiers, requêtes anonymisées. */
@@ -83,6 +94,17 @@ export interface ModelInfo {
   /** Modèles d'image. */
   constraints?: ImageConstraints;
   imagePrice?: number;
+  /** Modèles vidéo, musique, voix : spécification brute. */
+  spec?: Record<string, unknown>;
+}
+
+export interface Character {
+  slug: string;
+  name: string;
+  description: string;
+  tags: string[];
+  adult: boolean;
+  modelId: string | null;
 }
 
 export interface ImageConstraints {
@@ -186,6 +208,10 @@ export interface Conversation {
   systemPrompt: string | null;
   /** Instructions enregistrées choisies ("" = aucune ; absent = ancienne conversation). */
   promptId?: string;
+  /** Effort de raisonnement ("" = défaut du modèle, "off" = sans réflexion). */
+  reasoningEffort?: string;
+  /** Personnage public de Venice. */
+  character?: { slug: string; name: string };
   messages: Message[];
   workspace?: string;
   permissionMode?: PermissionMode;
@@ -467,6 +493,7 @@ export const api = {
   saveImage: (dataUrl: string, name: string) => invoke<boolean>("save_image", { dataUrl, name }),
   speak: (text: string) => invoke<string>("speak", { text }),
   balance: () => invoke<Balance>("account_balance"),
+  listCharacters: (search: string) => invoke<Character[]>("list_characters", { search }),
 
   mcpGetConfig: () => invoke<string>("mcp_get_config"),
   mcpSaveConfig: (text: string) => invoke<void>("mcp_save_config", { text }),
@@ -484,6 +511,8 @@ export const api = {
       toolChoice?: "auto" | "none";
       /** Recherche web intégrée de Venice. */
       webSearch?: boolean;
+      reasoningEffort?: string | null;
+      characterSlug?: string | null;
     },
     onEvent: (e: StreamEvent) => void,
   ): Promise<void> {

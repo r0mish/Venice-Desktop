@@ -13,6 +13,7 @@ import { loadInstructions, renderChrome, toggleWsMenu, updateComposerState } fro
 import { guessRisk, renderConversation, rerenderMessage, scrollBottom } from "./thread";
 import { renderAttachments } from "./attachments";
 import { openSettings } from "./settings-ui";
+import { checkBudget } from "./budget";
 
 const MAX_CHAT_STEPS = 15;
 const MAX_AUTO_CONTINUE = 2;
@@ -66,6 +67,8 @@ export async function send() {
       updatedAt: now,
       systemPrompt: state.settings.systemPrompts.find((p) => p.id === o.promptId)?.text ?? null,
       promptId: o.promptId ?? "",
+      ...(o.reasoningEffort ? { reasoningEffort: o.reasoningEffort } : {}),
+      ...(o.character ? { character: o.character } : {}),
       messages: [],
       workspace: o.workspace,
       permissionMode: o.permissionMode,
@@ -258,6 +261,8 @@ async function streamTurn(conv: Conversation, msg: Message, tools: Awaited<Retur
         maxTokens: state.settings.maxTokens,
         tools: tools.map((t) => t.definition),
         webSearch: !!conv.webSearch,
+        reasoningEffort: conv.reasoningEffort || null,
+        characterSlug: conv.kind === "chat" ? (conv.character?.slug ?? null) : null,
       },
       (ev) => {
         switch (ev.type) {
@@ -532,6 +537,7 @@ export async function runAgent() {
     renderSidebar();
     renderUsage();
     await saveCurrent();
+    checkBudget();
   }
 }
 
@@ -615,6 +621,7 @@ export async function runImage() {
   renderActivity();
   renderSidebar();
   await saveCurrent();
+  checkBudget();
 }
 
 export async function stop() {
@@ -640,12 +647,9 @@ el.input.addEventListener("keydown", (e) => {
   }
 });
 el.modelSelect.addEventListener("change", () => {
-  if (state.imageMode) {
-    state.selectedImageModel = el.modelSelect.value;
-    renderChrome();
-  } else {
-    state.selectedModel = el.modelSelect.value;
-  }
+  if (state.imageMode) state.selectedImageModel = el.modelSelect.value;
+  else state.selectedModel = el.modelSelect.value;
+  renderChrome();
   el.modelSelect.title = modelTitle((state.imageMode ? state.imageModels : state.models).find((m) => m.id === el.modelSelect.value));
   renderUsage();
 });

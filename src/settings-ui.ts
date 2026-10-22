@@ -39,6 +39,8 @@ const s = {
   ttsVoice: $<HTMLInputElement>("#s-tts-voice"),
   ttsSpeed: $<HTMLInputElement>("#s-tts-speed"),
   balance: $("#balance"),
+  balanceAlert: $<HTMLInputElement>("#s-balance-alert"),
+  budget: $<HTMLInputElement>("#s-budget"),
   timeout: $<HTMLInputElement>("#s-timeout"),
   mcp: $<HTMLTextAreaElement>("#s-mcp"),
   mcpStatus: $("#mcp-status"),
@@ -69,54 +71,78 @@ const s = {
   vaultKeyAction: $<HTMLButtonElement>("#vault-key-action"),
 };
 
-// ---------------------------------------------------------------- instructions système
+// ---------------------------------------------------------------- instructions système, modèles de messages
 
-/** Copie en cours d'édition (enregistrée avec les réglages). */
-let prompts: SystemPromptPreset[] = [];
-let defaultPrompt = "";
-
-function renderPrompts() {
-  s.prompts.innerHTML = prompts.length
-    ? prompts
-        .map(
-          (p, i) => `<div class="prompt-row" data-i="${i}">
+/** Liste éditable (nom + texte), copie de travail enregistrée avec les réglages. */
+function presetEditor(box: HTMLElement, addBtn: HTMLElement, opts: { withDefault: boolean; namePh: string; textPh: string; empty: string }) {
+  let items: SystemPromptPreset[] = [];
+  let def = "";
+  const render = () => {
+    box.innerHTML = items.length
+      ? items
+          .map(
+            (p, i) => `<div class="prompt-row" data-i="${i}">
             <div class="row">
-              <input data-f="name" value="${escapeHtml(p.name)}" placeholder="Nom (ex. : Admin Linux, Traducteur…)" spellcheck="false" />
-              <label class="check"><input type="checkbox" data-f="default"${p.id === defaultPrompt ? " checked" : ""} /> par défaut</label>
-              <button type="button" class="btn-ghost sm danger" data-del title="Supprimer ces instructions">Supprimer</button>
+              <input data-f="name" value="${escapeHtml(p.name)}" placeholder="${escapeHtml(opts.namePh)}" spellcheck="false" />
+              ${opts.withDefault ? `<label class="check"><input type="checkbox" data-f="default"${p.id === def ? " checked" : ""} /> par défaut</label>` : ""}
+              <button type="button" class="btn-ghost sm danger" data-del title="Supprimer">Supprimer</button>
             </div>
-            <textarea data-f="text" rows="3" placeholder="Ex. : Tu es un administrateur système Linux expérimenté. Réponds en français, avec des commandes prêtes à copier.">${escapeHtml(p.text)}</textarea>
+            <textarea data-f="text" rows="3" placeholder="${escapeHtml(opts.textPh)}">${escapeHtml(p.text)}</textarea>
           </div>`,
-        )
-        .join("")
-    : '<p class="muted small">Aucune instruction enregistrée.</p>';
+          )
+          .join("")
+      : `<p class="muted small">${escapeHtml(opts.empty)}</p>`;
+  };
+  const row = (t: EventTarget | null) => Number((t as HTMLElement).closest<HTMLElement>(".prompt-row")?.dataset.i);
+  box.addEventListener("input", (e) => {
+    const t = e.target as HTMLInputElement | HTMLTextAreaElement;
+    const p = items[row(t)];
+    if (!p) return;
+    if (t.dataset.f === "name") p.name = t.value;
+    else if (t.dataset.f === "text") p.text = t.value;
+  });
+  box.addEventListener("change", (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.dataset.f !== "default") return;
+    const p = items[row(t)];
+    def = t.checked && p ? p.id : "";
+    render();
+  });
+  box.addEventListener("click", (e) => {
+    if (!(e.target as HTMLElement).closest("[data-del]")) return;
+    const [removed] = items.splice(row(e.target), 1);
+    if (removed?.id === def) def = "";
+    render();
+  });
+  addBtn.addEventListener("click", () => {
+    items.push({ id: uid().slice(0, 8), name: "", text: "" });
+    render();
+    box.querySelector<HTMLInputElement>(".prompt-row:last-child [data-f=name]")?.focus();
+  });
+  return {
+    set(list: SystemPromptPreset[], defaultId = "") {
+      items = list.map((p) => ({ ...p }));
+      def = defaultId;
+      render();
+    },
+    get() {
+      const list = items.filter((p) => p.name.trim() || p.text.trim()).map((p) => ({ ...p, name: p.name.trim() || "Sans nom" }));
+      return { list, def: list.some((p) => p.id === def) ? def : "" };
+    },
+  };
 }
 
-s.prompts.addEventListener("input", (e) => {
-  const t = e.target as HTMLInputElement | HTMLTextAreaElement;
-  const p = prompts[Number(t.closest<HTMLElement>(".prompt-row")?.dataset.i)];
-  if (!p) return;
-  if (t.dataset.f === "name") p.name = t.value;
-  else if (t.dataset.f === "text") p.text = t.value;
+const promptEditor = presetEditor(s.prompts, $("#s-prompt-add"), {
+  withDefault: true,
+  namePh: "Nom (ex. : Admin Linux, Traducteur…)",
+  textPh: "Ex. : Tu es un administrateur système Linux expérimenté. Réponds en français, avec des commandes prêtes à copier.",
+  empty: "Aucune instruction enregistrée.",
 });
-s.prompts.addEventListener("change", (e) => {
-  const t = e.target as HTMLInputElement;
-  if (t.dataset.f !== "default") return;
-  const p = prompts[Number(t.closest<HTMLElement>(".prompt-row")?.dataset.i)];
-  defaultPrompt = t.checked && p ? p.id : "";
-  renderPrompts();
-});
-s.prompts.addEventListener("click", (e) => {
-  const row = (e.target as HTMLElement).closest<HTMLElement>("[data-del]")?.closest<HTMLElement>(".prompt-row");
-  if (!row) return;
-  const [removed] = prompts.splice(Number(row.dataset.i), 1);
-  if (removed?.id === defaultPrompt) defaultPrompt = "";
-  renderPrompts();
-});
-$("#s-prompt-add").addEventListener("click", () => {
-  prompts.push({ id: uid().slice(0, 8), name: "", text: "" });
-  renderPrompts();
-  s.prompts.querySelector<HTMLInputElement>(".prompt-row:last-child [data-f=name]")?.focus();
+const templateEditor = presetEditor($("#s-templates"), $("#s-template-add"), {
+  withDefault: false,
+  namePh: "Nom court (ex. : resume, mail, revue)",
+  textPh: "Ex. : Résume le texte suivant en 5 points clés :",
+  empty: "Aucun modèle de message.",
 });
 
 function renderShellInfo() {
@@ -344,9 +370,10 @@ export async function openSettings(tab = "general") {
   fillModelSelect(s.model, st.defaultModel, { auto: true });
   fillModelSelect(s.codeModel, st.codeModel, { auto: true });
   fillModelSelect(s.imageModel, st.imageModel, { auto: true, kind: "image" });
-  prompts = (st.systemPrompts ?? []).map((p) => ({ ...p }));
-  defaultPrompt = st.defaultPrompt ?? "";
-  renderPrompts();
+  promptEditor.set(st.systemPrompts ?? [], st.defaultPrompt ?? "");
+  templateEditor.set(st.promptTemplates ?? []);
+  s.balanceAlert.value = st.balanceAlert?.toString() ?? "";
+  s.budget.value = st.monthlyBudget?.toString() ?? "";
   s.temp.value = st.temperature?.toString() ?? "";
   s.max.value = st.maxTokens?.toString() ?? "";
   s.theme.value = st.theme;
@@ -431,10 +458,11 @@ $("#settings-form").addEventListener("submit", async (e) => {
     baseUrl: s.base.value.trim() || "https://api.venice.ai/api/v1",
     defaultModel: s.model.value,
     systemPrompt: "",
-    systemPrompts: prompts
-      .filter((p) => p.name.trim() || p.text.trim())
-      .map((p) => ({ ...p, name: p.name.trim() || "Sans nom" })),
-    defaultPrompt: "",
+    systemPrompts: promptEditor.get().list,
+    defaultPrompt: promptEditor.get().def,
+    promptTemplates: templateEditor.get().list,
+    balanceAlert: num(s.balanceAlert.value),
+    monthlyBudget: num(s.budget.value) || null,
     temperature: num(s.temp.value),
     maxTokens: num(s.max.value),
     theme: s.theme.value as Settings["theme"],
@@ -468,7 +496,6 @@ $("#settings-form").addEventListener("submit", async (e) => {
     transcriptionVocabulary: s.sttVocab.value,
     encryptData: s.encrypt.checked,
   };
-  next.defaultPrompt = next.systemPrompts.some((p) => p.id === defaultPrompt) ? defaultPrompt : "";
   try {
     next.prices = parsePrices(s.prices.value);
   } catch (err) {

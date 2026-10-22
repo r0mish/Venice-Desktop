@@ -44,6 +44,8 @@ export const el = {
   projectEdit: $<HTMLButtonElement>("#project-edit"),
   convProject: $<HTMLSelectElement>("#conv-project"),
   promptSelect: $<HTMLSelectElement>("#prompt-select"),
+  effortSelect: $<HTMLSelectElement>("#effort-select"),
+  slashMenu: $("#slash-menu"),
 };
 
 /** Ce que fait l'agent en ce moment (barre d'activité). */
@@ -78,6 +80,8 @@ export interface Draft {
   projectId?: string;
   /** Instructions enregistrées ("" = aucune). */
   promptId?: string;
+  reasoningEffort?: string;
+  character?: { slug: string; name: string };
 }
 
 export const state = {
@@ -176,6 +180,8 @@ export const opts = () => {
     systemAccess: !!(c ? c.systemAccess : state.draft.systemAccess),
     imageGen: !!(c ? c.imageGen : state.draft.imageGen),
     promptId: c ? c.promptId : state.draft.promptId,
+    reasoningEffort: (c ? c.reasoningEffort : state.draft.reasoningEffort) ?? "",
+    character: c ? c.character : state.draft.character,
     permissionMode: (c ? c.permissionMode : state.draft.permissionMode) ?? "ask",
     projectId: c ? c.projectId : state.draft.projectId,
   };

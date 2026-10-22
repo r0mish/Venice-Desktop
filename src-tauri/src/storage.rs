@@ -23,6 +23,12 @@ pub struct Settings {
     pub system_prompts: Vec<SystemPrompt>,
     /// Instructions des nouvelles conversations (id ; vide = aucune).
     pub default_prompt: String,
+    /// Modèles de messages, insérés en tapant « / » dans la zone de saisie.
+    pub prompt_templates: Vec<SystemPrompt>,
+    /// Alerte quand le solde USD descend sous ce montant (None = pas d'alerte).
+    pub balance_alert: Option<f64>,
+    /// Budget mensuel estimé, en $ (None = pas de budget).
+    pub monthly_budget: Option<f64>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub theme: String,
@@ -124,6 +130,9 @@ impl Default for Settings {
             system_prompt: String::new(),
             system_prompts: Vec::new(),
             default_prompt: String::new(),
+            prompt_templates: Vec::new(),
+            balance_alert: None,
+            monthly_budget: None,
             temperature: None,
             max_tokens: None,
             theme: "system".into(),

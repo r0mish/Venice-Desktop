@@ -7,6 +7,7 @@ import { scheduleGitRefresh, toggleGitPanel } from "./git-ui";
 import { findProject, projectList } from "./projects-ui";
 import { el, errMsg, opts, state, type Draft } from "./state";
 import { copy, fillTopModelSelect, icons, isVenice, toast } from "./ui";
+import { openCharacterDialog } from "./characters-ui";
 import { newChat, projectOptions } from "./sidebar";
 import { renderConversation, renderWelcome } from "./thread";
 import { renderActivity, renderUsage, saveCurrent } from "./run";
@@ -48,7 +49,8 @@ export function renderChrome() {
     el.convProject.value = o.projectId && findProject(o.projectId) ? o.projectId : "";
     el.convProject.classList.toggle("on", !!el.convProject.value);
   }
-  renderPromptSelect(o.promptId, c?.systemPrompt ?? null);
+  renderPromptSelect(o.promptId, c?.systemPrompt ?? null, o.kind === "chat" ? o.character : undefined);
+  renderEffortSelect(o.reasoningEffort);
   if (o.kind !== "code" || !o.workspace) toggleGitPanel(false);
   if (o.kind === "code") scheduleGitRefresh(200);
   else el.gitBtn.hidden = true;
@@ -72,35 +74,81 @@ export function renderChrome() {
     o.kind === "code" ? "Décrivez la tâche à réaliser dans le projet…" : img ? "Décrivez l'image à générer…" : "Écrivez à Venice…";
   el.mcpToggle.hidden ||= img;
   el.promptSelect.hidden ||= img;
+  el.effortSelect.hidden ||= img;
   el.composer.classList.toggle("image-mode", img);
   updateComposerState();
   renderUsage();
   renderActivity();
 }
 
-/** Instructions système de la conversation (barre du haut). */
-function renderPromptSelect(promptId: string | undefined, snapshot: string | null) {
+/** Instructions système et personnage Venice de la conversation (barre du haut). */
+function renderPromptSelect(promptId: string | undefined, snapshot: string | null, character?: { slug: string; name: string }) {
   const presets = state.settings.systemPrompts ?? [];
+  const venice = isVenice() && opts().kind === "chat";
   // Ancienne conversation ou instruction supprimée : son texte reste utilisé, affiché à part.
   const orphan = !presets.some((p) => p.id === promptId) && !!snapshot?.trim();
-  el.promptSelect.hidden = !presets.length && !orphan;
+  el.promptSelect.hidden = !presets.length && !orphan && !venice;
   if (el.promptSelect.hidden) return;
   el.promptSelect.innerHTML =
     '<option value="">Sans instructions</option>' +
     (orphan ? '<option value="__keep">Instructions de la conversation</option>' : "") +
-    presets.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || "Sans nom")}</option>`).join("");
-  el.promptSelect.value = orphan ? "__keep" : (promptId ?? "");
+    presets.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || "Sans nom")}</option>`).join("") +
+    (venice
+      ? `<optgroup label="Personnages Venice">${character ? `<option value="__charset">🎭 ${escapeHtml(character.name)}</option>` : ""}<option value="__char">Choisir un personnage…</option></optgroup>`
+      : "");
+  el.promptSelect.value = character && venice ? "__charset" : orphan ? "__keep" : (promptId ?? "");
   el.promptSelect.classList.toggle("on", !!el.promptSelect.value);
   const text = orphan ? snapshot! : presets.find((p) => p.id === promptId)?.text ?? "";
-  el.promptSelect.title = text ? `Instructions système :\n${text.slice(0, 600)}${text.length > 600 ? "…" : ""}` : "Aucune instruction système";
+  el.promptSelect.title = character
+    ? `Personnage Venice : ${character.name}`
+    : text
+      ? `Instructions système :\n${text.slice(0, 600)}${text.length > 600 ? "…" : ""}`
+      : "Aucune instruction système";
 }
 
 el.promptSelect.addEventListener("change", () => {
   const id = el.promptSelect.value;
-  if (id === "__keep") return;
-  if (state.current) state.current.systemPrompt = state.settings.systemPrompts.find((p) => p.id === id)?.text ?? null;
+  if (id === "__keep" || id === "__charset") return;
+  if (id === "__char") {
+    renderChrome();
+    return openCharacterDialog((c) => setOpt("character", c));
+  }
+  if (state.current) {
+    state.current.systemPrompt = state.settings.systemPrompts.find((p) => p.id === id)?.text ?? null;
+    state.current.character = undefined;
+  } else {
+    state.draft.character = undefined;
+  }
   setOpt("promptId", id);
 });
+
+const EFFORT_LABEL: Record<string, string> = {
+  none: "aucune",
+  minimal: "minimale",
+  low: "faible",
+  medium: "moyenne",
+  high: "élevée",
+  xhigh: "très élevée",
+  max: "maximale",
+};
+
+/** Effort de raisonnement, pour les modèles qui réfléchissent. */
+function renderEffortSelect(effort: string) {
+  const m = state.models.find((x) => x.id === (state.current && state.busy ? state.current.model : state.selectedModel));
+  el.effortSelect.hidden = !m || (!m.reasoning && !m.reasoningEfforts.length);
+  if (el.effortSelect.hidden || !m) return;
+  const levels = m.reasoningEfforts.filter((e) => e !== "none");
+  const def = m.defaultEffort ? ` (${EFFORT_LABEL[m.defaultEffort] ?? m.defaultEffort})` : "";
+  el.effortSelect.innerHTML =
+    `<option value="">Réflexion : par défaut${def}</option>` +
+    levels.map((l) => `<option value="${escapeHtml(l)}">Réflexion : ${escapeHtml(EFFORT_LABEL[l] ?? l)}</option>`).join("") +
+    '<option value="off">Sans réflexion (plus rapide)</option>';
+  el.effortSelect.value = levels.includes(effort) || effort === "off" ? effort : "";
+  el.effortSelect.classList.toggle("on", !!el.effortSelect.value);
+  el.effortSelect.title = "Effort de raisonnement du modèle : plus d'effort = réponses plus réfléchies, mais plus lentes et plus coûteuses";
+}
+
+el.effortSelect.addEventListener("change", () => setOpt("reasoningEffort", el.effortSelect.value));
 
 el.webToggle.addEventListener("click", () => setOpt("webSearch", !opts().webSearch));
 el.imgToggle.addEventListener("click", () => {
