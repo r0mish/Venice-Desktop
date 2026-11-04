@@ -1,7 +1,7 @@
 name: Release
 
 # À chaque push sur main, une release est construite et publiée si la version
-# de src-tauri/tauri.conf.json n'a pas encore de tag (sinon le job s'arrête en
+# de src-tauri/tauri.conf.json n'a pas encore de release publiée (sinon le job s'arrête en
 # quelques secondes). Également déclenchable à la main : Actions → Release.
 on:
   push:
@@ -24,12 +24,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Version et tag existant
+      - name: Version et release existante
         id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(jq -r .version src-tauri/tauri.conf.json)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+          # Release publiée pour ce tag ? (un tag seul, laissé par une publication en échec, ne compte pas)
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/v$VERSION")
+          if [ "$STATUS" = "200" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "::notice::La release v$VERSION existe déjà, rien à faire."
           else
@@ -44,10 +49,11 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         with:
           script: |
-            // Brouillons laissés par une release précédente en échec pour la même version.
+            // Brouillons laissés par des releases précédentes en échec (cette version ou une autre) :
+            // un seul workflow de release tourne à la fois (concurrency), aucun n'est en cours d'écriture.
             const tag = `v${process.env.VERSION}`;
             const existing = await github.rest.repos.listReleases({ owner: context.repo.owner, repo: context.repo.repo, per_page: 50 });
-            for (const r of existing.data.filter((r) => r.draft && r.tag_name === tag)) {
+            for (const r of existing.data.filter((r) => r.draft)) {
               await github.rest.repos.deleteRelease({ owner: context.repo.owner, repo: context.repo.repo, release_id: r.id });
               core.notice(`Brouillon ${tag} précédent supprimé (${r.id}).`);
             }
@@ -168,9 +174,25 @@ jobs:
                 await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: a.id });
               }
             }
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: Number(process.env.RELEASE_ID),
-              draft: false,
-            });
+            // Le passage du brouillon en release crée le tag ; l'API renvoie parfois une erreur 500
+            // (délai dépassé côté GitHub). Tag créé explicitement d'abord, puis nouvelles tentatives
+            // espacées, en vérifiant chaque fois si la publication a quand même abouti.
+            const { data: draft } = await github.rest.repos.getRelease({ ...repo, release_id });
+            try {
+              await github.rest.git.createRef({ ...repo, ref: `refs/tags/${draft.tag_name}`, sha: draft.target_commitish });
+            } catch (e) {
+              if (e.status !== 422) throw e; // 422 : le tag existe déjà
+            }
+            const delays = [0, 15, 30, 60, 120];
+            for (const [i, wait] of delays.entries()) {
+              await new Promise((r) => setTimeout(r, wait * 1000));
+              try {
+                await github.rest.repos.updateRelease({ ...repo, release_id, draft: false });
+                return;
+              } catch (e) {
+                const { data: now } = await github.rest.repos.getRelease({ ...repo, release_id }).catch(() => ({ data: { draft: true } }));
+                if (!now.draft) return;
+                core.warning(`Publication : essai ${i + 1}/${delays.length} en échec (${e.status ?? e.message}).`);
+                if (i === delays.length - 1) throw e;
+              }
+            }
