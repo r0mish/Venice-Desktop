@@ -195,7 +195,7 @@ async function renderUsageTab() {
   s.usageTotal.textContent = rows.length ? `Total estimé : ${fmtCost(total)}${unknown ? " (+ modèles sans tarif)" : ""}` : "";
   s.usageTable.innerHTML = rows.length
     ? `<table class="usage"><thead><tr><th>Modèle</th><th>Requêtes</th><th>Entrée</th><th>Sortie</th><th>Coût estimé</th></tr></thead><tbody>${rows
-        .map((r) => `<tr><td><code>${escapeHtml(r.model)}</code></td><td>${r.requests}</td><td>${fmtTokens(r.prompt)}</td><td>${fmtTokens(r.completion)}</td><td>${r.cost === null ? "tarif inconnu" : fmtCost(r.cost)}</td></tr>`)
+        .map((r) => `<tr><td><code>${escapeHtml(r.model)}</code></td><td>${r.requests}</td><td title="${r.cached ? `dont ${r.cached.toLocaleString("fr-FR")} lus en cache (tarif réduit)` : ""}">${fmtTokens(r.prompt)}${r.cached ? ` <span class="muted">(${Math.round((r.cached / r.prompt) * 100)} % cache)</span>` : ""}</td><td>${fmtTokens(r.completion)}</td><td>${r.cost === null ? "tarif inconnu" : fmtCost(r.cost)}</td></tr>`)
         .join("")}</tbody></table>`
     : '<p class="muted small">Aucune consommation enregistrée sur cette période.</p>';
 }

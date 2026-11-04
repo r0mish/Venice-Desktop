@@ -1,7 +1,7 @@
 // Utilitaires d'interface : notifications, thème, presse-papiers, icônes et liste des modèles.
 import { api, type ModelInfo, type Settings } from "./api";
 import { escapeHtml } from "./markdown";
-import { modelPrices } from "./usage";
+import { modelPricing } from "./usage";
 import { defaultModelFor, el, errMsg, state } from "./state";
 
 // ---------------------------------------------------------------- utilitaires
@@ -111,6 +111,8 @@ export function modelTitle(m: ModelInfo | undefined): string {
     m.e2ee ? "🔐 Chiffré de bout en bout : seule l'enclave (TEE attestée) peut lire vos messages ; sans outils ni recherche web" : "",
     m.maxContextLength ? `Contexte : ${m.maxContextLength.toLocaleString("fr-FR")} tokens` : "",
     m.price ? `Tarif : ${m.price[0]} $ / ${m.price[1]} $ par million de tokens (entrée / sortie)` : "",
+    m.pricing?.cacheInput != null ? `Entrée lue en cache : ${m.pricing.cacheInput} $ par million de tokens` : "",
+    m.pricing?.extended ? `Au-delà de ${m.pricing.extended.threshold.toLocaleString("fr-FR")} tokens d'entrée : ${m.pricing.extended.input} $ / ${m.pricing.extended.output} $` : "",
     m.imagePrice ? `Tarif : ${m.imagePrice} $ par image` : "",
     m.description ?? "",
   ];
@@ -183,8 +185,11 @@ export async function loadModels() {
   ]);
   if (text.status === "fulfilled") {
     state.models = text.value;
-    modelPrices.clear();
-    for (const m of state.models) if (m.price) modelPrices.set(m.id, m.price);
+    modelPricing.clear();
+    for (const m of state.models) {
+      const p = m.pricing ?? (m.price ? { input: m.price[0], output: m.price[1], cacheInput: null, cacheWrite: null, extended: null } : null);
+      if (p) modelPricing.set(m.id, p);
+    }
   } else {
     toast(`Liste des modèles indisponible : ${errMsg(text.reason)}`, true);
   }

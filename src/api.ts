@@ -115,6 +115,8 @@ export interface ModelInfo {
   traits: string[];
   /** $ par million de tokens [entrée, sortie]. */
   price: [number, number] | null;
+  /** Tarifs détaillés : entrée lue / écrite en cache, contexte long ($ par million de tokens). */
+  pricing?: Pricing | null;
   /** Modèles d'image. */
   constraints?: ImageConstraints;
   imagePrice?: number;
@@ -270,6 +272,19 @@ export interface Compaction {
 export interface Usage {
   promptTokens: number;
   completionTokens: number;
+  /** Part de l'entrée lue depuis le cache de contexte (tarif réduit). */
+  cachedTokens?: number;
+  /** Part de l'entrée écrite dans le cache (tarif majoré chez certains fournisseurs). */
+  cacheWriteTokens?: number;
+}
+
+export interface Pricing {
+  input: number;
+  output: number;
+  cacheInput: number | null;
+  cacheWrite: number | null;
+  /** Tarifs appliqués à toute la requête au-delà de `threshold` tokens d'entrée. */
+  extended: { threshold: number; input: number; output: number; cacheInput: number | null; cacheWrite: number | null } | null;
 }
 
 export type Kind = "chat" | "code";
@@ -364,7 +379,7 @@ export interface KeyStatus {
 export type StreamEvent =
   | { type: "delta"; text: string }
   | { type: "reasoning"; text: string }
-  | { type: "usage"; promptTokens: number; completionTokens: number }
+  | { type: "usage"; promptTokens: number; completionTokens: number; cachedTokens: number; cacheWriteTokens: number }
   | { type: "toolCalls"; calls: { id: string; name: string; arguments: string }[] }
   | { type: "citations"; items: Citation[] }
   | { type: "e2ee"; attestation: E2eeAttestation }
@@ -482,7 +497,8 @@ export interface GitCommit {
 }
 
 /** jour → modèle → [entrée, sortie, requêtes] */
-export type UsageLog = Record<string, Record<string, [number, number, number]>>;
+/** Jour → modèle → [entrée, sortie, requêtes, entrée lue en cache, entrée écrite en cache]. */
+export type UsageLog = Record<string, Record<string, number[]>>;
 
 export const api = {
   keyStatus: () => invoke<KeyStatus>("api_key_status"),
@@ -506,8 +522,8 @@ export const api = {
     invoke<{ os: string; shell: string; shellPath: string; shellGuidance: string; version: string; venice: boolean; nativeSearch: boolean }>(
       "platform_info",
     ),
-  recordUsage: (day: string, model: string, promptTokens: number, completionTokens: number) =>
-    invoke<void>("record_usage", { day, model, promptTokens, completionTokens }),
+  recordUsage: (day: string, model: string, u: Usage) =>
+    invoke<void>("record_usage", { day, model, promptTokens: u.promptTokens, completionTokens: u.completionTokens, cachedTokens: u.cachedTokens ?? 0, cacheWriteTokens: u.cacheWriteTokens ?? 0 }),
   getUsage: () => invoke<UsageLog>("get_usage"),
   checkUpdate: () => invoke<UpdateInfo>("check_update"),
 
@@ -624,6 +640,8 @@ export const api = {
       characterSlug?: string | null;
       /** Modèle en enclave : messages chiffrés de bout en bout. */
       e2ee?: boolean;
+      /** Conversation : même cache de contexte d'une requête à l'autre (entrée facturée au tarif réduit). */
+      cacheKey?: string | null;
     },
     onEvent: (e: StreamEvent) => void,
   ): Promise<void> {

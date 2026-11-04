@@ -105,7 +105,8 @@ function sse(res, chunks) {
 
 function chat(req, res) {
   const out = script(req);
-  const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };
+  // Comme Venice : part de l'entrée servie depuis le cache de contexte.
+  const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, prompt_tokens_details: { cached_tokens: 80 } };
   if (out.toolCalls) {
     const tool_calls = out.toolCalls.map((t, i) => ({
       id: `call_${Date.now() % 1e6}${i}`,
@@ -148,7 +149,7 @@ const modelJson = (m) => ({
       reasoningEffortOptions: ["low", "medium", "high"],
       defaultReasoningEffort: "medium",
     },
-    pricing: { input: { usd: 0.5, diem: 0.5 }, output: { usd: 2, diem: 2 } },
+    pricing: { input: { usd: 0.5, diem: 0.5 }, cache_input: { usd: 0.05, diem: 0.05 }, output: { usd: 2, diem: 2 } },
   },
 });
 

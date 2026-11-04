@@ -67,6 +67,9 @@ test("application de bout en bout", async (t) => {
     assert.equal(req.venice_parameters.include_venice_system_prompt, false, "invite système de Venice désactivée par défaut");
     assert.equal(req.venice_parameters.enable_web_search, "off");
     assert.deepEqual(req.stream_options, { include_usage: true });
+    // Même clé de cache pour toute la conversation : entrée relue au tarif réduit.
+    assert.match(req.prompt_cache_key ?? "", /\w{8,}/);
+    await d.waitFor(() => document.querySelector("#usage-info").title.includes("dont 80 lus en cache"), { message: "tokens en cache comptés" });
     await d.waitText("#conv-list", "Bonjour depuis le test");
     await d.waitText("#activity", "Terminé");
   });

@@ -1,5 +1,6 @@
 // Panneau Git du mode Code : état, diff, indexation, commit, synchronisation, branches.
-import { api, type GitFile, type GitStatus } from "./api";
+import { api, type GitFile, type GitStatus, type Usage } from "./api";
+import { usageOf } from "./usage";
 import { diffHtml } from "./agent";
 import { escapeHtml } from "./markdown";
 
@@ -11,7 +12,7 @@ interface Deps {
   model: () => string;
   toast: (msg: string, error?: boolean) => void;
   /** Consommation des requêtes de génération de message. */
-  recordUsage: (model: string, prompt: number, completion: number) => void;
+  recordUsage: (model: string, usage: Usage) => void;
 }
 
 let deps: Deps;
@@ -226,7 +227,7 @@ async function generateMessage() {
           text += ev.text;
           area.value = text.replace(/^```\w*\n?|```$/g, "").trimStart();
         } else if (ev.type === "usage") {
-          deps.recordUsage(model, ev.promptTokens, ev.completionTokens);
+          deps.recordUsage(model, usageOf(ev));
         }
       },
     );

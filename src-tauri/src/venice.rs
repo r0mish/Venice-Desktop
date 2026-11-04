@@ -57,6 +57,9 @@ pub struct ChatRequest {
     /// Modèle à chiffrement de bout en bout : messages chiffrés pour l'enclave.
     #[serde(default)]
     pub e2ee: bool,
+    /// Identifiant de conversation (`prompt_cache_key`) : les requêtes successives d'une même
+    /// conversation retombent sur le même cache, d'où des tokens d'entrée facturés au tarif réduit.
+    pub cache_key: Option<String>,
 }
 
 /// Options propres à Venice (`venice_parameters`), tirées des réglages.
@@ -82,8 +85,9 @@ pub struct Citation {
 pub enum StreamEvent {
     Delta { text: String },
     Reasoning { text: String },
+    /// Consommation de la requête ; `cached_tokens` et `cache_write_tokens` font partie de `prompt_tokens`.
     #[serde(rename_all = "camelCase")]
-    Usage { prompt_tokens: u64, completion_tokens: u64 },
+    Usage { prompt_tokens: u64, completion_tokens: u64, cached_tokens: u64, cache_write_tokens: u64 },
     ToolCalls { calls: Vec<ToolCall> },
     /// Sources de la recherche web intégrée (premier morceau du flux).
     Citations { items: Vec<Citation> },
@@ -121,6 +125,8 @@ pub struct ModelInfo {
     pub traits: Vec<String>,
     /// $ par million de tokens [entrée, sortie].
     pub price: Option<[f64; 2]>,
+    /// Tarifs détaillés (cache, contexte long) pour l'estimation du coût.
+    pub pricing: Option<Pricing>,
     /// Modèles d'image : contraintes (formats, résolutions, longueur du prompt…), telles quelles.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub constraints: Option<Value>,
@@ -206,6 +212,49 @@ fn price(v: &Value) -> Option<f64> {
     v["usd"].as_f64()
 }
 
+/// Tarifs d'un modèle de texte, en $ par million de tokens.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Pricing {
+    pub input: f64,
+    pub output: f64,
+    /// Entrée lue depuis le cache (modèles avec cache de contexte).
+    pub cache_input: Option<f64>,
+    /// Entrée écrite dans le cache (fournisseurs qui la facturent, ex. Anthropic).
+    pub cache_write: Option<f64>,
+    /// Tarifs « contexte long », appliqués à toute la requête au-delà du seuil de tokens d'entrée.
+    pub extended: Option<ExtendedPricing>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtendedPricing {
+    pub threshold: u64,
+    pub input: f64,
+    pub output: f64,
+    pub cache_input: Option<f64>,
+    pub cache_write: Option<f64>,
+}
+
+fn pricing(p: &Value) -> Option<Pricing> {
+    let ext = &p["extended"];
+    Some(Pricing {
+        input: price(&p["input"])?,
+        output: price(&p["output"])?,
+        cache_input: price(&p["cache_input"]),
+        cache_write: price(&p["cache_write"]),
+        extended: (|| {
+            Some(ExtendedPricing {
+                threshold: ext["context_token_threshold"].as_u64()?,
+                input: price(&ext["input"])?,
+                output: price(&ext["output"])?,
+                cache_input: price(&ext["cache_input"]),
+                cache_write: price(&ext["cache_write"]),
+            })
+        })(),
+    })
+}
+
 fn model_info(m: &Value) -> Option<ModelInfo> {
     let spec = &m["model_spec"];
     let caps = &spec["capabilities"];
@@ -234,6 +283,7 @@ fn model_info(m: &Value) -> Option<ModelInfo> {
         beta: spec["beta"].as_bool().unwrap_or(false) || spec["betaModel"].as_bool().unwrap_or(false),
         traits: spec["traits"].as_array().into_iter().flatten().filter_map(|t| t.as_str().map(str::to_owned)).collect(),
         price: price(&spec["pricing"]["input"]).zip(price(&spec["pricing"]["output"])).map(|(i, o)| [i, o]),
+        pricing: pricing(&spec["pricing"]),
         constraints: spec.get("constraints").filter(|c| c.is_object()).cloned(),
         image_price: price(&spec["pricing"]["generation"]),
         spec: (m["type"].as_str().is_some_and(|t| t != "text" && t != "image") && spec.is_object()).then(|| spec.clone()),
@@ -362,11 +412,26 @@ pub fn build_body(req: &ChatRequest, base: &str, opts: &VeniceOptions) -> Value 
         if let Some(slug) = req.character_slug.as_deref().filter(|s| !s.is_empty()) {
             body["venice_parameters"]["character_slug"] = json!(slug);
         }
+        if let Some(k) = req.cache_key.as_deref().filter(|k| !k.is_empty()) {
+            body["prompt_cache_key"] = json!(k);
+        }
     }
     if let Some(effort) = req.reasoning_effort.as_deref().filter(|e| !e.is_empty() && *e != "off") {
         body["reasoning_effort"] = json!(effort);
     }
     body
+}
+
+/// Consommation d'une réponse, avec les tokens d'entrée lus depuis le cache (tarif réduit)
+/// et écrits dans le cache (tarif majoré chez certains fournisseurs).
+fn parse_usage(u: &Value) -> Option<StreamEvent> {
+    let details = &u["prompt_tokens_details"];
+    Some(StreamEvent::Usage {
+        prompt_tokens: u["prompt_tokens"].as_u64()?,
+        completion_tokens: u["completion_tokens"].as_u64()?,
+        cached_tokens: details["cached_tokens"].as_u64().unwrap_or(0),
+        cache_write_tokens: details["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+    })
 }
 
 /// Sépare le raisonnement `<think>…</think>` du texte, morceau par morceau
@@ -646,11 +711,8 @@ pub async fn chat_stream(
             if let Some(fr) = choice["finish_reason"].as_str() {
                 finish_reason = Some(fr.to_owned());
             }
-            if let (Some(p), Some(c)) = (
-                v["usage"]["prompt_tokens"].as_u64(),
-                v["usage"]["completion_tokens"].as_u64(),
-            ) {
-                let _ = on_event.send(StreamEvent::Usage { prompt_tokens: p, completion_tokens: c });
+            if let Some(usage) = parse_usage(&v["usage"]) {
+                let _ = on_event.send(usage);
             }
         }
     }
@@ -1249,6 +1311,7 @@ mod tests {
             reasoning_effort: None,
             character_slug: None,
             e2ee: false,
+            cache_key: Some("conv-1".into()),
         };
         let opts = VeniceOptions { web_search_mode: "auto", include_system_prompt: false, e2ee: None };
         let b = build_body(&req, DEFAULT_BASE_URL, &opts);
@@ -1257,7 +1320,10 @@ mod tests {
         assert_eq!(b["venice_parameters"]["include_venice_system_prompt"], false);
         assert_eq!(b["stream_options"]["include_usage"], true);
         assert!(b.get("max_tokens").is_none());
-        assert!(build_body(&req, "http://localhost:8000/v1", &opts).get("venice_parameters").is_none());
+        assert_eq!(b["prompt_cache_key"], "conv-1");
+        // Serveur compatible OpenAI : aucun paramètre propre à Venice.
+        let other = build_body(&req, "http://localhost:8000/v1", &opts);
+        assert!(other.get("venice_parameters").is_none() && other.get("prompt_cache_key").is_none());
         req.web_search = false;
         assert_eq!(build_body(&req, DEFAULT_BASE_URL, &opts)["venice_parameters"]["enable_web_search"], "off");
         // Effort de raisonnement, réflexion désactivée, personnage.
@@ -1295,6 +1361,7 @@ mod tests {
             reasoning_effort: None,
             character_slug: None,
             e2ee: true,
+            cache_key: None,
         };
         let b = e2ee_body(&req, &session).unwrap();
         let msgs = b["messages"].as_array().unwrap();
@@ -1361,6 +1428,27 @@ mod tests {
         let img = model_info(&json!({ "id": "flux", "type": "image", "model_spec": { "pricing": { "generation": { "usd": 0.01 } } } })).unwrap();
         assert!(!img.vision && !img.tools);
         assert_eq!(img.image_price, Some(0.01));
+        // Tarifs du cache et du contexte long.
+        let c = model_info(&json!({ "id": "claude", "model_spec": { "pricing": {
+            "input": { "usd": 3 }, "output": { "usd": 15 }, "cache_input": { "usd": 0.3 }, "cache_write": { "usd": 3.75 },
+            "extended": { "context_token_threshold": 200000, "input": { "usd": 6 }, "output": { "usd": 22.5 }, "cache_input": { "usd": 0.6 } }
+        } } }))
+        .unwrap();
+        let p = c.pricing.unwrap();
+        assert_eq!((p.input, p.output, p.cache_input, p.cache_write), (3.0, 15.0, Some(0.3), Some(3.75)));
+        let e = p.extended.unwrap();
+        assert_eq!((e.threshold, e.input, e.cache_input, e.cache_write), (200000, 6.0, Some(0.6), None));
+        assert!(i.pricing.unwrap().cache_input.is_none());
+    }
+
+    #[test]
+    fn usage_with_cache_details() {
+        let u = json!({ "prompt_tokens": 1000, "completion_tokens": 50, "prompt_tokens_details": { "cached_tokens": 900, "cache_creation_input_tokens": 40 } });
+        let Some(StreamEvent::Usage { prompt_tokens, cached_tokens, cache_write_tokens, .. }) = parse_usage(&u) else { panic!() };
+        assert_eq!((prompt_tokens, cached_tokens, cache_write_tokens), (1000, 900, 40));
+        let plain = json!({ "prompt_tokens": 10, "completion_tokens": 2, "prompt_tokens_details": null });
+        assert!(matches!(parse_usage(&plain), Some(StreamEvent::Usage { cached_tokens: 0, cache_write_tokens: 0, .. })));
+        assert!(parse_usage(&Value::Null).is_none());
     }
 
     #[test]

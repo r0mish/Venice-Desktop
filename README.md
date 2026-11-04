@@ -131,7 +131,7 @@ Configuration au **format de Claude Desktop** (Réglages → MCP) :
 - **Barre d'activité** : phase en cours, chronomètre, numéro d'étape ; bilan en fin de tâche avec bouton **Continuer**
 - **Résilience** : nouvel essai automatique (5 fois, `Retry-After` respecté) sur 429/5xx et coupures réseau ; flux muet 120 s interrompu
 - **Jauge de contexte** et **compaction automatique** à 80 % (résumé par le modèle)
-- **Consommation** : tokens et coût estimé par conversation et par jour, d'après les **tarifs publiés par l'API**
+- **Consommation** : tokens et coût estimé par conversation et par jour, d'après les **tarifs publiés par l'API**, comme Venice facture : entrée relue depuis le **cache de contexte** au tarif réduit, écriture en cache, tarif « contexte long » au-delà du seuil du modèle. Chaque conversation envoie sa propre clé de cache (`prompt_cache_key`) pour que l'historique renvoyé à chaque étape de l'agent soit relu en cache
 - **Forfait Venice** : jauge en bas de la barre latérale (DIEM du jour, crédits inclus à l'abonnement ou solde), détail dans Réglages → Utilisation : soldes utilisables par la clé, réinitialisation quotidienne, palier et limites de débit du modèle. Avec une **clé ADMIN** facultative (Venice réserve `/billing` à ce type de clé) : pourcentage des DIEM du jour, crédits du forfait consommés depuis le dernier renouvellement, **relevé facturé** par jour et par modèle (7 à 90 jours)
 - **Alertes** : solde (USD + crédits du forfait) sous un seuil, budget mensuel estimé dépassé (Réglages → Utilisation)
 - **Mises à jour** signées (minisign), désactivables

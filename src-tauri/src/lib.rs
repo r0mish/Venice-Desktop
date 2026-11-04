@@ -1067,8 +1067,16 @@ fn platform_info(app: AppHandle) -> serde_json::Value {
 }
 
 #[tauri::command]
-fn record_usage(app: AppHandle, day: String, model: String, prompt_tokens: u64, completion_tokens: u64) -> CmdResult<()> {
-    storage::record_usage(&app, &day, &model, prompt_tokens, completion_tokens)
+fn record_usage(
+    app: AppHandle,
+    day: String,
+    model: String,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    cached_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+) -> CmdResult<()> {
+    storage::record_usage(&app, &day, &model, [prompt_tokens, completion_tokens, cached_tokens.unwrap_or(0), cache_write_tokens.unwrap_or(0)])
 }
 
 #[tauri::command]

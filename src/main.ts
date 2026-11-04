@@ -3,7 +3,7 @@ import "./styles.css";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { api } from "./api";
-import { today } from "./usage";
+import { addUsage, today } from "./usage";
 import { initSshUi, loadHosts } from "./ssh-ui";
 import { initGitUi, toggleGitPanel } from "./git-ui";
 import { initProjectsUi, loadProjects } from "./projects-ui";
@@ -105,13 +105,11 @@ async function init() {
     workspace: () => (opts().kind === "code" ? opts().workspace : undefined),
     model: () => state.selectedModel || state.settings.codeModel,
     toast,
-    recordUsage: (model, p, c) => {
-      api.recordUsage(today(), model, p, c).catch(() => {});
+    recordUsage: (model, u) => {
+      api.recordUsage(today(), model, u).catch(() => {});
       if (state.current) {
         state.current.extraUsage ??= {};
-        const u = (state.current.extraUsage[model] ??= { promptTokens: 0, completionTokens: 0 });
-        u.promptTokens += p;
-        u.completionTokens += c;
+        addUsage((state.current.extraUsage[model] ??= { promptTokens: 0, completionTokens: 0 }), u);
         renderUsage();
       }
     },

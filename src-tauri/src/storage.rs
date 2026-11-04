@@ -595,7 +595,9 @@ pub fn remove_workspace(app: &AppHandle, path: &str) -> R<Vec<String>> {
 }
 
 /// Consommation agrégée par jour et par modèle : `{"2026-10-12": {"modèle": [entrée, sortie, requêtes]}}`.
-pub type UsageLog = std::collections::BTreeMap<String, std::collections::BTreeMap<String, [u64; 3]>>;
+/// Jour → modèle → [entrée, sortie, requêtes, entrée lue en cache, entrée écrite en cache]
+/// (les deux derniers compteurs sont absents des journaux antérieurs à la v0.2.2).
+pub type UsageLog = std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<u64>>>;
 
 fn usage_path(app: &AppHandle) -> R<PathBuf> {
     Ok(data_dir(app)?.join("usage.json"))
@@ -609,12 +611,14 @@ pub fn load_usage(app: &AppHandle) -> UsageLog {
         .unwrap_or_default()
 }
 
-pub fn record_usage(app: &AppHandle, day: &str, model: &str, prompt: u64, completion: u64) -> R<()> {
+pub fn record_usage(app: &AppHandle, day: &str, model: &str, counts: [u64; 4]) -> R<()> {
+    let [prompt, completion, cached, cache_write] = counts;
     let mut log = load_usage(app);
-    let e = log.entry(day.to_owned()).or_default().entry(model.to_owned()).or_insert([0, 0, 0]);
-    e[0] += prompt;
-    e[1] += completion;
-    e[2] += 1;
+    let e = log.entry(day.to_owned()).or_default().entry(model.to_owned()).or_default();
+    e.resize(e.len().max(5), 0);
+    for (i, n) in [(0, prompt), (1, completion), (2, 1), (3, cached), (4, cache_write)] {
+        e[i] += n;
+    }
     write_json(&usage_path(app)?, &log)
 }
 

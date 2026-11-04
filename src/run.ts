@@ -1,7 +1,7 @@
 // Envoi des messages et boucle d'agent : streaming, outils, approbations, contexte et consommation.
-import { api, type ApiMessage, type Conversation, type ImageRequest, type Message, type ModelInfo, type ToolCallRec } from "./api";
+import { api, type ApiMessage, type Conversation, type ImageRequest, type Message, type ModelInfo, type ToolCallRec, type Usage } from "./api";
 import { COMPACT_PROMPT, looksUnfinished, needsApproval, toApiMessages, toolLabel } from "./agent";
-import { contextTokens, conversationUsage, fmtCost, fmtDuration, fmtTokens, today } from "./usage";
+import { addUsage, contextTokens, conversationUsage, fmtCost, fmtDuration, fmtTokens, today, usageOf } from "./usage";
 import { escapeHtml } from "./markdown";
 import { workspaceLabel } from "./ssh-ui";
 import { scheduleGitRefresh } from "./git-ui";
@@ -200,9 +200,14 @@ export function renderUsage() {
   const u = conversationUsage(c, state.settings);
   el.usageInfo.hidden = u.promptTokens + u.completionTokens === 0;
   el.usageInfo.textContent = `${fmtTokens(u.promptTokens + u.completionTokens)} tokens · ${u.cost === null ? "coût ?" : fmtCost(u.cost)}`;
+  const n = (x: number) => x.toLocaleString("fr-FR");
   el.usageInfo.title =
-    `Consommation de cette conversation\nEntrée : ${u.promptTokens.toLocaleString("fr-FR")} tokens\nSortie : ${u.completionTokens.toLocaleString("fr-FR")} tokens\n` +
-    `Coût estimé : ${fmtCost(u.cost)} (tarifs modifiables dans Réglages → Utilisation)`;
+    `Consommation de cette conversation (toutes les requêtes, l'historique est renvoyé à chaque étape)\n` +
+    `Entrée : ${n(u.promptTokens)} tokens` +
+    (u.cachedTokens ? `, dont ${n(u.cachedTokens)} lus en cache (tarif réduit)` : "") +
+    (u.cacheWriteTokens ? `, dont ${n(u.cacheWriteTokens)} écrits en cache` : "") +
+    `\nSortie : ${n(u.completionTokens)} tokens\n` +
+    `Coût estimé : ${fmtCost(u.cost)} (tarifs publiés par Venice, cache compris ; modifiables dans Réglages → Utilisation)`;
 }
 
 el.ctxMeter.addEventListener("click", async () => {
@@ -225,13 +230,11 @@ el.ctxMeter.addEventListener("click", async () => {
   }
 });
 
-function recordUsage(conv: Conversation, model: string, promptTokens: number, completionTokens: number, extra: boolean) {
-  api.recordUsage(today(), model, promptTokens, completionTokens).catch(() => {});
+function recordUsage(conv: Conversation, model: string, u: Usage, extra: boolean) {
+  api.recordUsage(today(), model, u).catch(() => {});
   if (extra) {
     conv.extraUsage ??= {};
-    const u = (conv.extraUsage[model] ??= { promptTokens: 0, completionTokens: 0 });
-    u.promptTokens += promptTokens;
-    u.completionTokens += completionTokens;
+    addUsage((conv.extraUsage[model] ??= { promptTokens: 0, completionTokens: 0 }), u);
   }
 }
 
@@ -252,7 +255,7 @@ async function compact(conv: Conversation) {
     { model: conv.model, messages, temperature: 0.2, maxTokens: 4000, tools: tools.map((t) => t.definition), toolChoice: "none" },
     (ev) => {
       if (ev.type === "delta") summary += ev.text;
-      else if (ev.type === "usage") recordUsage(conv, conv.model, ev.promptTokens, ev.completionTokens, true);
+      else if (ev.type === "usage") recordUsage(conv, conv.model, usageOf(ev), true);
       else if (ev.type === "retry") setActivity("Compaction : nouvel essai dans", ev.reason, { until: Date.now() + ev.delaySecs * 1000 });
       else if (ev.type === "done" && ev.cancelled) failed = "annulée";
     },
@@ -295,6 +298,7 @@ async function streamTurn(conv: Conversation, msg: Message, tools: Awaited<Retur
         e2ee,
         reasoningEffort: conv.reasoningEffort || null,
         characterSlug: conv.kind === "chat" ? (conv.character?.slug ?? null) : null,
+        cacheKey: conv.id,
       },
       (ev) => {
         switch (ev.type) {
@@ -315,8 +319,8 @@ async function streamTurn(conv: Conversation, msg: Message, tools: Awaited<Retur
             setActivity("Réflexion…", `≈ ${fmtTokens(Math.round(msg.reasoning.length / 3.5))} tokens`);
             break;
           case "usage":
-            msg.usage = { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
-            recordUsage(conv, conv.model, ev.promptTokens, ev.completionTokens, false);
+            msg.usage = usageOf(ev);
+            recordUsage(conv, conv.model, msg.usage, false);
             break;
           case "toolCalls":
             msg.toolCalls = ev.calls.map((c) => ({ ...c, status: "queued" as const }));
@@ -376,13 +380,14 @@ async function streamCompare(conv: Conversation, msg: Message, model: string) {
         webSearch: !!conv.webSearch && !modelInfo(model)?.e2ee,
         e2ee: !!modelInfo(model)?.e2ee,
         characterSlug: conv.character?.slug ?? null,
+        cacheKey: conv.id,
       },
       (ev) => {
         if (ev.type === "delta") cmp.content += ev.text;
         else if (ev.type === "reasoning") cmp.reasoning = (cmp.reasoning ?? "") + ev.text;
         else if (ev.type === "usage") {
-          cmp.usage = { promptTokens: ev.promptTokens, completionTokens: ev.completionTokens };
-          recordUsage(conv, model, ev.promptTokens, ev.completionTokens, true);
+          cmp.usage = usageOf(ev);
+          recordUsage(conv, model, cmp.usage, true);
         } else if (ev.type === "done" && ev.cancelled) cmp.error = "Interrompu.";
         rerenderMessage(msg);
       },
