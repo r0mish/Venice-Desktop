@@ -24,6 +24,7 @@ import "./attachments";
 
 $("#open-settings").addEventListener("click", () => openSettings());
 $("#open-gallery").addEventListener("click", () => openGallery());
+$("#plan-chip").addEventListener("click", () => openSettings("usage"));
 $("#new-chat").addEventListener("click", newChat);
 $("#toggle-sidebar").addEventListener("click", () => el.app.classList.toggle("sidebar-hidden"));
 

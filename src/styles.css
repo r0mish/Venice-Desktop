@@ -880,3 +880,23 @@ table.usage th { color: var(--muted); font-weight: 500; }
 .voice-btn.on { color: #fff; background: var(--accent); }
 .voice-btn[data-phase="listening"] { animation: pulse-ring 1.4s ease-out infinite; }
 @keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+
+/* Forfait Venice : jauge de la barre latérale et détail dans les réglages. */
+.plan-chip { display: grid; gap: 4px; width: 100%; padding: 6px 10px; margin-bottom: 4px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.plan-chip:hover { background: var(--bg-hover); }
+.plan-chip.blocked { border-color: var(--danger); color: var(--danger); }
+.plan-chip-line { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
+.plan-chip-line strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.plan-chip.blocked .plan-chip-line strong { color: var(--danger); }
+.plan-bar { display: block; height: 6px; border-radius: 3px; background: var(--bg-active); overflow: hidden; }
+.plan-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.plan-bar.warn > span { background: #d98a00; }
+.plan-bar.crit > span { background: var(--danger); }
+.plan-row { display: grid; gap: 4px; margin: 0 0 10px; }
+.plan-row-head { display: flex; justify-content: space-between; font-size: 13px; }
+.plan-row-head strong { font-variant-numeric: tabular-nums; }
+.admin-key summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+.an-days { display: flex; align-items: flex-end; gap: 2px; height: 72px; margin: 8px 0; padding-bottom: 2px; border-bottom: 1px solid var(--border); }
+.an-day { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.an-day > span { display: block; width: 100%; background: var(--accent); border-radius: 2px 2px 0 0; }
+.an-day:hover > span { background: var(--accent-hover); }

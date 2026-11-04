@@ -32,6 +32,7 @@
         </div>
         <nav id="conv-list"></nav>
         <div class="sidebar-bottom">
+          <button id="plan-chip" type="button" class="plan-chip" hidden></button>
           <button id="open-gallery" class="btn-ghost" title="Toutes les images générées">
             <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>
             Galerie
@@ -519,10 +520,11 @@
             <p class="muted small">Tokens exacts renvoyés par l'API ; coûts <strong>estimés</strong> d'après les tarifs publiés dans la liste des modèles de Venice (ou vos tarifs personnalisés). Votre relevé fait foi : <a href="https://venice.ai/settings/api" data-external>venice.ai</a>.</p>
           </fieldset>
           <fieldset>
-            <legend>Solde du compte</legend>
+            <legend>Forfait Venice</legend>
+            <div id="plan-panel"></div>
             <div class="row">
-              <span class="muted small" id="balance"></span>
-              <button type="button" id="balance-refresh" class="btn-ghost sm">Afficher le solde</button>
+              <span class="muted small" id="plan-status"></span>
+              <button type="button" id="plan-refresh" class="btn-ghost sm">Actualiser</button>
             </div>
             <div class="grid2">
               <label>Alerte si le solde descend sous ($)
@@ -532,7 +534,26 @@
                 <input id="s-budget" type="number" min="0" step="1" placeholder="aucun budget" />
               </label>
             </div>
-            <p class="muted small">Le solde est vérifié au plus toutes les 10 minutes après vos échanges ; le budget compare les coûts estimés du mois en cours (alerte à 80 % et 100 %).</p>
+            <p class="muted small">Le forfait est relu au plus toutes les 10 minutes après vos échanges (une requête à Venice, rien d'autre) ; l'alerte porte sur le solde USD plus les crédits du forfait. Le budget compare les coûts estimés du mois en cours (alerte à 80 % et 100 %).</p>
+            <details class="admin-key">
+              <summary>Clé ADMIN (facultative) : pourcentage DIEM, crédits reçus, relevé facturé</summary>
+              <p class="muted small" id="admin-key-status"></p>
+              <div class="row">
+                <input id="admin-key" type="password" placeholder="VENICE_ADMIN_KEY_…" autocomplete="off" spellcheck="false" />
+                <button type="button" id="admin-key-save" class="btn-ghost sm">Enregistrer</button>
+                <button type="button" id="admin-key-delete" class="btn-ghost sm danger">Supprimer</button>
+              </div>
+              <p class="muted small">Venice réserve les endpoints de facturation (<code>/billing</code>) aux clés ADMIN. Une telle clé peut aussi gérer vos clés API : l'application ne l'utilise qu'en lecture, pour ces trois endpoints, et la garde dans le trousseau du système. Sans elle, les soldes restent affichés.</p>
+            </details>
+          </fieldset>
+          <fieldset>
+            <legend>Relevé facturé par Venice</legend>
+            <select id="analytics-period">
+              <option value="7d">7 derniers jours</option>
+              <option value="30d" selected>30 derniers jours</option>
+              <option value="90d">90 derniers jours</option>
+            </select>
+            <div id="analytics"></div>
           </fieldset>
           <fieldset>
             <legend>Tarifs personnalisés ($ par million de tokens, facultatif)</legend>

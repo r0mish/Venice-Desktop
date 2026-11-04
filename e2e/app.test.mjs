@@ -317,6 +317,33 @@ test("application de bout en bout", async (t) => {
     await d.waitText("#toast", "Solde Venice bas");
   });
 
+  await step(t, "forfait : jauge, détail, clé ADMIN et relevé", async () => {
+    // Clé d'inférence seule : soldes lus via /api_keys/rate_limits, sans pourcentage DIEM.
+    await d.waitText("#plan-chip", "DIEM du jour");
+    await d.waitText("#plan-chip", "7,5 restants");
+    assert.ok(!requests.some((r) => r.path?.startsWith("/v1/billing/")), "aucun appel /billing sans clé ADMIN");
+    await d.click("#plan-chip");
+    await d.waitFor(() => document.querySelector("#settings").open && !document.querySelector('#settings .tab[data-tab="usage"]').hidden, { message: "onglet Utilisation" });
+    await d.waitText("#plan-panel", "Crédits du forfait");
+    await d.waitText("#plan-panel", "Limites de zai-org-glm-5-1 : 50 RPM");
+    await d.waitText("#analytics", "clé ADMIN");
+    if (process.env.E2E_KEYRING) {
+      await d.click(".admin-key summary");
+      await d.type("#admin-key", "admin-e2e");
+      await d.click("#admin-key-save");
+      await d.waitText("#admin-key-status", "Clé ADMIN enregistrée");
+      // DIEM : 2,5 utilisés sur 10 ; forfait : 8,25 $ sur 10 $ depuis le renouvellement.
+      await d.waitText("#plan-panel", "25 %");
+      await d.waitText("#plan-panel", "8,25 $ utilisés sur 10 $");
+      await d.waitText("#analytics", "GLM 5.1");
+      await d.waitText("#plan-chip", "25 %");
+      assert.equal(requests.findLast((r) => r.path === "/v1/billing/usage-history").query.currency, "BUNDLED_CREDITS");
+      await d.click("#admin-key-delete");
+      await d.waitText("#admin-key-status", "Aucune clé ADMIN");
+    }
+    await d.click("#settings-cancel");
+  });
+
   await step(t, "versions d'un message et comparaison de modèles", async () => {
     const act = (sel) => d.exec((s) => document.querySelector(s).click(), sel);
     await d.click("#new-chat");

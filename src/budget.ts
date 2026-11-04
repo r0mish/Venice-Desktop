@@ -1,11 +1,10 @@
 // Alertes de solde bas et de budget mensuel dépassé (une fois par seuil et par session).
 import { api } from "./api";
+import { refreshPlan } from "./plan";
 import { aggregate, fmtCost } from "./usage";
 import { state } from "./state";
-import { isVenice, toast } from "./ui";
+import { toast } from "./ui";
 
-const BALANCE_INTERVAL = 10 * 60 * 1000;
-let lastBalance = 0;
 const warned = new Set<string>();
 
 function warnOnce(key: string, msg: string) {
@@ -14,7 +13,7 @@ function warnOnce(key: string, msg: string) {
   toast(msg, true);
 }
 
-/** Vérifie le budget du mois (estimation locale) et, au plus toutes les 10 min, le solde du compte. */
+/** Vérifie le budget du mois (estimation locale) et, au plus toutes les 10 min, le forfait et le solde. */
 export async function checkBudget(force = false) {
   const s = state.settings;
   if (!s) return;
@@ -27,14 +26,12 @@ export async function checkBudget(force = false) {
       warnOnce("budget-80", `80 % du budget mensuel atteint : ${fmtCost(spent)} sur ${s.monthlyBudget} $ (estimation).`);
     }
   }
-  if (s.balanceAlert == null || !isVenice() || !state.keyConfigured) return;
-  if (!force && Date.now() - lastBalance < BALANCE_INTERVAL) return;
-  lastBalance = Date.now();
-  const b = await api.balance().catch(() => null);
-  const usd = b?.balances.usd;
-  if (usd == null) return;
-  if (usd < s.balanceAlert) {
-    warnOnce("balance", `Solde Venice bas : ${usd.toLocaleString("fr-FR", { maximumFractionDigits: 2 })} $ (alerte sous ${s.balanceAlert} $).`);
+  // Forfait relu au plus toutes les 10 minutes : jauge de la barre latérale et alerte de solde.
+  const p = await refreshPlan(force);
+  if (s.balanceAlert == null || !p || (p.usd == null && p.bundled == null)) return;
+  const spendable = (p.usd ?? 0) + (p.bundled ?? 0);
+  if (spendable < s.balanceAlert) {
+    warnOnce("balance", `Solde Venice bas : ${spendable.toLocaleString("fr-FR", { maximumFractionDigits: 2 })} $ (alerte sous ${s.balanceAlert} $).`);
   } else {
     warned.delete("balance");
   }

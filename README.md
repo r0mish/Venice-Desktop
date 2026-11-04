@@ -131,8 +131,9 @@ Configuration au **format de Claude Desktop** (Réglages → MCP) :
 - **Barre d'activité** : phase en cours, chronomètre, numéro d'étape ; bilan en fin de tâche avec bouton **Continuer**
 - **Résilience** : nouvel essai automatique (5 fois, `Retry-After` respecté) sur 429/5xx et coupures réseau ; flux muet 120 s interrompu
 - **Jauge de contexte** et **compaction automatique** à 80 % (résumé par le modèle)
-- **Consommation** : tokens et coût estimé par conversation et par jour, d'après les **tarifs publiés par l'API** ; **solde du compte** (USD, DIEM, crédits) dans Réglages → Utilisation
-- **Alertes** : solde sous un seuil, budget mensuel estimé dépassé (Réglages → Utilisation)
+- **Consommation** : tokens et coût estimé par conversation et par jour, d'après les **tarifs publiés par l'API**
+- **Forfait Venice** : jauge en bas de la barre latérale (DIEM du jour, crédits inclus à l'abonnement ou solde), détail dans Réglages → Utilisation : soldes utilisables par la clé, réinitialisation quotidienne, palier et limites de débit du modèle. Avec une **clé ADMIN** facultative (Venice réserve `/billing` à ce type de clé) : pourcentage des DIEM du jour, crédits du forfait consommés depuis le dernier renouvellement, **relevé facturé** par jour et par modèle (7 à 90 jours)
+- **Alertes** : solde (USD + crédits du forfait) sous un seuil, budget mensuel estimé dépassé (Réglages → Utilisation)
 - **Mises à jour** signées (minisign), désactivables
 
 ### Raccourcis
@@ -147,7 +148,7 @@ Configuration au **format de Claude Desktop** (Réglages → MCP) :
 | Télémétrie | Aucune. Seule requête non sollicitée : vérification de mise à jour (`api.github.com`, sans identifiant), désactivable. |
 | Modèles | **Privés uniquement** par défaut (exécutés par Venice sans conservation). Les modèles de fournisseurs tiers sont signalés ◐ et masqués tant que vous ne les activez pas. |
 | Invite système Venice | Désactivée par défaut (`include_venice_system_prompt: false`) : seules vos instructions s'appliquent. |
-| Clé API | **Trousseau du système** (Keychain, Credential Manager, Secret Service/KWallet). Repli : variable `VENICE_API_KEY`. |
+| Clé API | **Trousseau du système** (Keychain, Credential Manager, Secret Service/KWallet). Repli : variable `VENICE_API_KEY`. Clé ADMIN facultative (relevés) : trousseau aussi, ou `VENICE_ADMIN_KEY` ; utilisée uniquement en lecture sur `/billing`. |
 | Appels réseau | Faits **côté Rust** (magasin de certificats du système) ; la clé n'est jamais exposée à la WebView. Destinations : l'URL d'API configurée, l'instance SearXNG éventuelle, les pages lues par `fetch_url`, vos serveurs MCP, votre serveur de transcription. |
 | Conversations | Fichiers JSON locaux, jamais synchronisés, **chiffrés par défaut** (XChaCha20-Poly1305, clé de 256 bits dans le trousseau) : conversations (images générées comprises), index, projets et `mcp.json`. Clé de récupération à sauvegarder dans votre gestionnaire de mots de passe (Réglages → Général). |
 | Sauvegarde | Export/import de toutes les données dans un fichier `.vdbk` chiffré par **phrase de passe** (Argon2id 64 Mio + XChaCha20-Poly1305, en-tête authentifié), indépendant du trousseau : pour changer d'ordinateur. Clé API jamais incluse ; données rechiffrées avec la clé locale à l'import. |
@@ -223,7 +224,7 @@ src/                    Interface (TypeScript, sans framework)
   branches.ts           Versions de messages ; lightbox.ts, gallery-ui.ts : visionneuse, galerie
   characters-ui.ts, templates-ui.ts, budget.ts   Personnages, modèles de messages, alertes
   attachments.ts        Pièces jointes (images, PDF, texte)
-  settings-ui.ts        Réglages, solde ; updates-ui.ts : mises à jour
+  settings-ui.ts        Réglages ; plan.ts : forfait Venice (jauge, relevé) ; updates-ui.ts : mises à jour
   agent.ts              Invites système, conversion API, politique d'approbation, cartes d'outils
   markdown.ts           marked + highlight.js + DOMPurify
   api.ts                Appels IPC typés vers Rust
@@ -243,6 +244,7 @@ src-tauri/src/
   e2ee.rs               Chiffrement de bout en bout : attestation TDX, ECDH secp256k1, AES-GCM
   backup.rs             Sauvegarde chiffrée par phrase de passe (Argon2id)
   semantic.rs           Recherche sémantique : embeddings, index chiffré incrémental
+  plan.rs               Forfait : soldes et limites de la clé, crédits depuis le dernier renouvellement
   textsearch.rs         Recherche locale : plein texte, découpage et classement BM25
   knowledge.rs          Fichiers de référence des projets : en entier ou extraits pertinents
   audio.rs              Capture du micro (cpal), rééchantillonnage 16 kHz, WAV en mémoire

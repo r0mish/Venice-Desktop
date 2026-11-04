@@ -182,11 +182,28 @@ export interface GalleryItem {
   src: string;
 }
 
-export interface Balance {
-  canConsume: boolean;
-  consumptionCurrency: string | null;
-  balances: { diem: number | null; usd: number | null; bundledCredits: number | null; earnedCredits: number | null };
-  diemEpochAllocation: number;
+/** Utilisation du forfait (GET /api_keys/rate_limits, complété par /billing avec une clé ADMIN). */
+export interface PlanUsage {
+  accessPermitted: boolean | null;
+  tier: string | null;
+  /** Réinitialisation des DIEM et limites journalières (ISO 8601). */
+  nextEpoch: string | null;
+  keyExpiration: string | null;
+  usd: number | null;
+  diem: number | null;
+  bundled: number | null;
+  diemAllocation: number | null;
+  bundledPeriod: { granted: number | null; since: string; used: number } | null;
+  rateLimits: Record<string, { type: string; amount: number }[]>;
+  admin: boolean;
+  adminError: string | null;
+}
+
+/** Relevé facturé (GET /billing/usage-analytics), champs utilisés. */
+export interface UsageAnalytics {
+  lookback: string;
+  byDate: { date: string; USD: number; DIEM: number }[];
+  byModel: { modelName: string; unitType: string; totalUsd: number; totalDiem: number; totalUnits: number }[];
 }
 
 export interface TextFile {
@@ -580,7 +597,11 @@ export const api = {
   },
   mediaRead: (id: string) => invoke<string>("media_read", { id }),
   mediaExport: (id: string, name: string, ext: string) => invoke<boolean>("media_export", { id, name, ext }),
-  balance: () => invoke<Balance>("account_balance"),
+  planUsage: (since: string) => invoke<PlanUsage>("plan_usage", { since }),
+  usageAnalytics: (lookback: string) => invoke<UsageAnalytics>("usage_analytics", { lookback }),
+  adminKeyStatus: () => invoke<boolean>("admin_key_status"),
+  setAdminKey: (key: string) => invoke<void>("set_admin_key", { key }),
+  deleteAdminKey: () => invoke<void>("delete_admin_key"),
   listCharacters: (search: string) => invoke<Character[]>("list_characters", { search }),
 
   mcpGetConfig: () => invoke<string>("mcp_get_config"),

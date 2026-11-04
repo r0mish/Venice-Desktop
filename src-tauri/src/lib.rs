@@ -4,6 +4,7 @@ mod backup;
 mod e2ee;
 mod git;
 mod mcp;
+mod plan;
 mod semantic;
 mod shell;
 mod ssh;
@@ -34,6 +35,9 @@ use tools::{ToolContext, ToolDef, ToolOutput};
 const KEYRING_SERVICE: &str = "dev.r0mish.venice-desktop";
 const KEYRING_USER: &str = "venice-api-key";
 const ENV_API_KEY: &str = "VENICE_API_KEY";
+/// Clé ADMIN facultative : lecture seule des endpoints /billing (relevé, allocation DIEM).
+const KEYRING_ADMIN_USER: &str = "venice-admin-key";
+const ENV_ADMIN_KEY: &str = "VENICE_ADMIN_KEY";
 
 /// Dictée vocale en cours.
 #[derive(Default)]
@@ -64,6 +68,45 @@ fn api_key() -> CmdResult<String> {
     match std::env::var(ENV_API_KEY) {
         Ok(key) if !key.is_empty() => Ok(key),
         _ => Err("Aucune clé API configurée. Ouvrez les réglages pour l'ajouter.".into()),
+    }
+}
+
+fn admin_entry() -> CmdResult<keyring::Entry> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_ADMIN_USER).map_err(|e| e.to_string())
+}
+
+fn admin_key() -> Option<String> {
+    admin_entry()
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .filter(|k| !k.is_empty())
+        .or_else(|| std::env::var(ENV_ADMIN_KEY).ok().filter(|k| !k.is_empty()))
+}
+
+#[tauri::command]
+fn admin_key_status() -> bool {
+    admin_key().is_some()
+}
+
+#[tauri::command]
+fn set_admin_key(key: String) -> CmdResult<()> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("Clé vide".into());
+    }
+    if key.starts_with("VENICE_INFERENCE_KEY_") {
+        return Err("C'est une clé d'inférence : les relevés demandent une clé ADMIN (VENICE_ADMIN_KEY_…).".into());
+    }
+    admin_entry()?
+        .set_password(key)
+        .map_err(|e| format!("Impossible d'écrire dans le trousseau du système : {e}"))
+}
+
+#[tauri::command]
+fn delete_admin_key() -> CmdResult<()> {
+    match admin_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -948,10 +991,36 @@ async fn list_characters(app: AppHandle, search: String) -> CmdResult<Vec<venice
     venice::characters(&settings.base_url, &api_key()?, &search).await
 }
 
+/// Utilisation du forfait : soldes de la clé, et avec une clé ADMIN l'allocation DIEM et les crédits
+/// consommés depuis le dernier renouvellement (relevé lu depuis `since`).
 #[tauri::command]
-async fn account_balance(app: AppHandle) -> CmdResult<serde_json::Value> {
-    let settings = storage::load_settings(&app)?;
-    venice::balance(&settings.base_url, &api_key()?).await
+async fn plan_usage(app: AppHandle, since: String) -> CmdResult<plan::PlanUsage> {
+    let base = storage::load_settings(&app)?.base_url;
+    let mut usage = plan::from_rate_limits(&venice::rate_limits(&base, &api_key()?).await?);
+    let Some(admin) = admin_key() else { return Ok(usage) };
+    usage.admin = true;
+    // Clé ADMIN : allocation DIEM du jour et crédits du forfait depuis le dernier renouvellement.
+    let (balance, ledger) = tokio::join!(venice::balance(&base, &admin), venice::usage_history(&base, &admin, &since, "BUNDLED_CREDITS"));
+    let mut errors = Vec::new();
+    match balance {
+        Ok(b) => usage.diem_allocation = b["diemEpochAllocation"].as_f64().filter(|a| *a > 0.0),
+        Err(e) => errors.push(e),
+    }
+    match ledger {
+        Ok(rows) => usage.bundled_period = Some(plan::bundled_period(&rows, &since)),
+        Err(e) => errors.push(e),
+    }
+    errors.dedup();
+    usage.admin_error = (!errors.is_empty()).then(|| errors.join(" ; "));
+    Ok(usage)
+}
+
+/// Relevé facturé par Venice (jours, modèles) ; nécessite la clé ADMIN.
+#[tauri::command]
+async fn usage_analytics(app: AppHandle, lookback: String) -> CmdResult<serde_json::Value> {
+    let base = storage::load_settings(&app)?.base_url;
+    let admin = admin_key().ok_or("Ajoutez une clé ADMIN pour afficher le relevé de Venice.")?;
+    venice::usage_analytics(&base, &admin, &lookback).await
 }
 
 // ------------------------------------------------------------------ MCP
@@ -1113,6 +1182,9 @@ pub fn run() {
             vault_import_key,
             set_api_key,
             delete_api_key,
+            admin_key_status,
+            set_admin_key,
+            delete_admin_key,
             get_settings,
             save_settings,
             list_models,
@@ -1139,7 +1211,8 @@ pub fn run() {
             generate_image,
             save_image,
             speak,
-            account_balance,
+            plan_usage,
+            usage_analytics,
             list_characters,
             transcribe_file,
             clone_voice,

@@ -8,6 +8,7 @@ import { applyTheme, autoModel, copy, fillModelSelect, fillTopModelSelect, loadM
 import { refreshConvs, renderSidebar } from "./sidebar";
 import { renderChrome } from "./chrome";
 import { renderWelcome } from "./thread";
+import { refreshPlan, renderAnalytics, renderPlanPanel } from "./plan";
 
 // ---------------------------------------------------------------- réglages
 
@@ -40,7 +41,9 @@ const s = {
   ttsModel: $<HTMLInputElement>("#s-tts-model"),
   ttsVoice: $<HTMLInputElement>("#s-tts-voice"),
   ttsSpeed: $<HTMLInputElement>("#s-tts-speed"),
-  balance: $("#balance"),
+  analyticsPeriod: $<HTMLSelectElement>("#analytics-period"),
+  adminKey: $<HTMLInputElement>("#admin-key"),
+  adminKeyStatus: $("#admin-key-status"),
   videoModel: $<HTMLSelectElement>("#s-video-model"),
   musicModel: $<HTMLSelectElement>("#s-music-model"),
   sttTimestamps: $<HTMLInputElement>("#s-stt-timestamps"),
@@ -226,6 +229,7 @@ export async function refreshKeyStatus() {
 function showTab(tab: string) {
   document.querySelectorAll<HTMLElement>(".settings-tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
   document.querySelectorAll<HTMLElement>("#settings .tab").forEach((t) => (t.hidden = t.dataset.tab !== tab));
+  if (tab === "usage") renderPlanTab();
 }
 document.querySelector(".settings-tabs")!.addEventListener("click", (e) => {
   const b = (e.target as HTMLElement).closest<HTMLElement>("[data-tab]");
@@ -375,23 +379,39 @@ function renderWebProvider() {
 }
 s.webProvider.addEventListener("change", renderWebProvider);
 
-const money = (n: number, unit: string) => `${n.toLocaleString("fr-FR", { maximumFractionDigits: 2 })} ${unit}`;
+// ---------------------------------------------------------------- forfait Venice
 
-$("#balance-refresh").addEventListener("click", async () => {
-  s.balance.textContent = "…";
+async function renderAdminKey() {
+  const has = await api.adminKeyStatus().catch(() => false);
+  s.adminKeyStatus.textContent = has ? "✓ Clé ADMIN enregistrée dans le trousseau." : "Aucune clé ADMIN.";
+  s.adminKey.value = "";
+}
+
+/** Onglet Utilisation : forfait, clé ADMIN et relevé facturé. */
+async function renderPlanTab(force = false) {
+  await renderPlanPanel(force);
+  await renderAdminKey();
+  await renderAnalytics(s.analyticsPeriod.value);
+}
+
+$("#plan-refresh").addEventListener("click", () => renderPlanTab(true));
+s.analyticsPeriod.addEventListener("change", () => renderAnalytics(s.analyticsPeriod.value));
+$("#admin-key-save").addEventListener("click", async () => {
   try {
-    const b = await api.balance();
-    const parts = [
-      b.balances.usd != null ? money(b.balances.usd, "$") : "",
-      b.balances.diem != null ? `${money(b.balances.diem, "DIEM")}${b.diemEpochAllocation ? ` sur ${money(b.diemEpochAllocation, "")}` : ""}` : "",
-      b.balances.bundledCredits ? money(b.balances.bundledCredits, "crédits inclus") : "",
-      b.balances.earnedCredits ? money(b.balances.earnedCredits, "crédits gagnés") : "",
-    ].filter(Boolean);
-    s.balance.className = b.canConsume ? "muted small" : "small error";
-    s.balance.textContent = `${parts.join(" · ") || "Aucun solde"}${b.consumptionCurrency ? ` — consommation en ${b.consumptionCurrency}` : ""}${b.canConsume ? "" : " — solde insuffisant"}`;
+    await api.setAdminKey(s.adminKey.value);
+    toast("Clé ADMIN enregistrée");
+    await renderPlanTab(true);
   } catch (e) {
-    s.balance.className = "small error";
-    s.balance.textContent = errMsg(e);
+    toast(errMsg(e), true);
+  }
+});
+$("#admin-key-delete").addEventListener("click", async () => {
+  try {
+    await api.deleteAdminKey();
+    toast("Clé ADMIN supprimée");
+    await renderPlanTab(true);
+  } catch (e) {
+    toast(errMsg(e), true);
   }
 });
 
@@ -524,7 +544,6 @@ export async function openSettings(tab = "general") {
   s.ttsModel.value = st.ttsModel ?? "";
   s.ttsVoice.value = st.ttsVoice ?? "";
   s.ttsSpeed.value = String(st.ttsSpeed ?? 1);
-  s.balance.textContent = "";
   s.timeout.value = String(st.commandTimeout);
   s.maxSteps.value = String(st.maxSteps);
   s.permission.value = st.defaultPermission ?? "auto";
@@ -568,6 +587,7 @@ $("#save-key").addEventListener("click", async () => {
     fillModelSelect(s.codeModel, s.codeModel.value, { auto: true });
     fillModelSelect(s.imageModel, s.imageModel.value, { auto: true, kind: "image" });
     if (!state.current) renderWelcome();
+    refreshPlan(true);
     toast("Clé API enregistrée");
   } catch (e) {
     s.error.textContent = errMsg(e);
@@ -578,6 +598,7 @@ $("#save-key").addEventListener("click", async () => {
 $("#delete-key").addEventListener("click", async () => {
   await api.deleteKey().catch((e) => toast(errMsg(e), true));
   await refreshKeyStatus();
+  refreshPlan(true);
   if (!state.current) renderWelcome();
 });
 

@@ -212,8 +212,47 @@ export function startMock(port = 0) {
         const q = (url.searchParams.get("search") ?? "").toLowerCase();
         return json(200, { object: "list", data: all.filter((c) => !q || c.name.toLowerCase().includes(q)) });
       }
-      if (req.method === "GET" && url.pathname === "/v1/billing/balance") {
-        return json(200, { canConsume: true, consumptionCurrency: "USD", balances: { usd: 2.5, diem: null, bundledCredits: null, earnedCredits: null }, diemEpochAllocation: 0 });
+      if (req.method === "GET" && url.pathname === "/v1/api_keys/rate_limits") {
+        // Toute clé : soldes utilisables par la clé, prochaine réinitialisation (minuit UTC).
+        const midnight = new Date();
+        midnight.setUTCHours(24, 0, 0, 0);
+        return json(200, {
+          data: {
+            accessPermitted: true,
+            apiTier: { id: "paid", isCharged: true },
+            balances: { USD: 2.5, DIEM: 7.5, BUNDLED_CREDITS: 1.75 },
+            keyExpiration: null,
+            nextEpochBegins: midnight.toISOString(),
+            rateLimits: [{ apiModelId: "zai-org-glm-5-1", rateLimits: [{ type: "RPM", amount: 50 }, { type: "TPM", amount: 750000 }] }],
+          },
+        });
+      }
+      if (url.pathname.startsWith("/v1/billing/")) {
+        // Comme Venice depuis juillet 2026 : endpoints de facturation réservés aux clés ADMIN.
+        if (req.headers.authorization !== "Bearer admin-e2e") return json(401, { error: "Admin API key required" });
+        requests.push({ path: url.pathname, query: Object.fromEntries(url.searchParams) });
+        if (url.pathname === "/v1/billing/balance") {
+          return json(200, { canConsume: true, consumptionCurrency: "DIEM", balances: { usd: 2.5, diem: 7.5, bundledCredits: 1.75, earnedCredits: null }, diemEpochAllocation: 10 });
+        }
+        if (url.pathname === "/v1/billing/usage-history") {
+          // Renouvellement du forfait (10 $) puis consommation : 8,25 $ utilisés.
+          return json(200, {
+            data: [
+              { timestamp: "2026-10-20T00:00:00.000Z", amount: 10, currency: "BUNDLED_CREDITS", notes: "Subscription credits", inferenceDetails: null },
+              { timestamp: "2026-10-21T10:00:00.000Z", amount: -6, currency: "BUNDLED_CREDITS", notes: "API Inference", inferenceDetails: null },
+              { timestamp: "2026-10-22T10:00:00.000Z", amount: -2.25, currency: "BUNDLED_CREDITS", notes: "API Inference", inferenceDetails: null },
+            ],
+            nextCursor: null,
+          });
+        }
+        if (url.pathname === "/v1/billing/usage-analytics") {
+          return json(200, {
+            lookback: url.searchParams.get("lookback") ?? "7d",
+            byDate: [{ date: "2026-10-21", USD: 6, DIEM: 1.5 }, { date: "2026-10-22", USD: 2.25, DIEM: 1 }],
+            byModel: [{ modelName: "GLM 5.1", unitType: "tokens", modelType: "LLM", totalUsd: 8.25, totalDiem: 2.5, totalUnits: 1234567 }],
+            byModelDaily: [], topModels: ["GLM 5.1"], byKey: [], byKeyDaily: [], topKeyNames: [],
+          });
+        }
       }
       if (req.method === "POST" && url.pathname === "/v1/audio/speech") {
         res.writeHead(200, { "Content-Type": "audio/mpeg" });

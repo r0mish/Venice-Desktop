@@ -1135,14 +1135,15 @@ pub async fn attestation(base: &str, key: &str, model: &str, nonce_hex: &str) ->
     resp.json().await.map_err(|e| e.to_string())
 }
 
-/// Solde du compte (USD, DIEM, crédits).
-pub async fn balance(base: &str, key: &str) -> Result<Value, String> {
+/// GET sur l'API Venice, réponse JSON.
+async fn get_json(base: &str, key: &str, path: &str, query: &[(&str, String)]) -> Result<Value, String> {
     if !is_venice(base) {
-        return Err("Solde disponible uniquement avec l'API Venice".into());
+        return Err("Suivi du forfait disponible uniquement avec l'API Venice".into());
     }
     let resp = client()?
-        .get(endpoint(base, "billing/balance"))
+        .get(endpoint(base, path))
         .bearer_auth(key)
+        .query(query)
         .timeout(Duration::from_secs(30))
         .send()
         .await
@@ -1151,6 +1152,39 @@ pub async fn balance(base: &str, key: &str) -> Result<Value, String> {
         return Err(api_error(resp).await);
     }
     resp.json().await.map_err(|e| e.to_string())
+}
+
+/// Soldes utilisables par la clé, palier, limites de débit, prochaine réinitialisation (toute clé).
+pub async fn rate_limits(base: &str, key: &str) -> Result<Value, String> {
+    Ok(get_json(base, key, "api_keys/rate_limits", &[]).await?["data"].take())
+}
+
+/// Solde du compte et allocation DIEM du jour (clé ADMIN).
+pub async fn balance(base: &str, admin_key: &str) -> Result<Value, String> {
+    get_json(base, admin_key, "billing/balance", &[]).await
+}
+
+/// Consommation facturée par jour et par modèle (clé ADMIN). `lookback` : « 7d » à « 90d ».
+pub async fn usage_analytics(base: &str, admin_key: &str, lookback: &str) -> Result<Value, String> {
+    get_json(base, admin_key, "billing/usage-analytics", &[("lookback", lookback.to_owned())]).await
+}
+
+/// Écritures du relevé depuis `since` (ISO 8601 UTC) pour une devise, dans l'ordre chronologique (clé ADMIN).
+pub async fn usage_history(base: &str, admin_key: &str, since: &str, currency: &str) -> Result<Vec<Value>, String> {
+    const MAX_PAGES: usize = 10;
+    let mut out = Vec::new();
+    let mut query = vec![("startTimestamp", since.to_owned()), ("currency", currency.to_owned()), ("pageSize", "1000".to_owned())];
+    for _ in 0..MAX_PAGES {
+        let mut page = get_json(base, admin_key, "billing/usage-history", &query).await?;
+        if let Some(rows) = page["data"].as_array_mut() {
+            out.append(rows);
+        }
+        match page["nextCursor"].as_str() {
+            Some(c) if !c.is_empty() => query = vec![("cursor", c.to_owned())],
+            _ => break,
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
