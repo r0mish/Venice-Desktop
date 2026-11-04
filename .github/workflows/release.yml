@@ -52,36 +52,52 @@ jobs:
             // Brouillons laissés par des releases précédentes en échec (cette version ou une autre) :
             // un seul workflow de release tourne à la fois (concurrency), aucun n'est en cours d'écriture.
             const tag = `v${process.env.VERSION}`;
-            const existing = await github.rest.repos.listReleases({ owner: context.repo.owner, repo: context.repo.repo, per_page: 50 });
-            for (const r of existing.data.filter((r) => r.draft)) {
-              await github.rest.repos.deleteRelease({ owner: context.repo.owner, repo: context.repo.repo, release_id: r.id });
-              core.notice(`Brouillon ${tag} précédent supprimé (${r.id}).`);
+            const repo = { owner: context.repo.owner, repo: context.repo.repo };
+            const drafts = async () => (await github.rest.repos.listReleases({ ...repo, per_page: 50 })).data.filter((r) => r.draft);
+            for (const r of await drafts()) {
+              await github.rest.repos.deleteRelease({ ...repo, release_id: r.id });
+              core.notice(`Brouillon ${r.tag_name} précédent supprimé (${r.id}).`);
             }
-            const { data } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: `v${process.env.VERSION}`,
-              target_commitish: context.sha,
-              name: `Venice Desktop v${process.env.VERSION}`,
-              body: [
-                "## Téléchargements",
-                "",
-                "| Système | Fichier |",
-                "|---|---|",
-                "| macOS Apple Silicon / ARM (M1…M4) | `Venice.Desktop_*_arm64.dmg` |",
-                "| Windows | `Venice.Desktop_*_x64-setup.exe` ou `Venice.Desktop_*_x64_fr-FR.msi` |",
-                "| Linux Debian/Ubuntu | `.deb` |",
-                "| Linux Fedora/openSUSE | `.rpm` |",
-                "| Linux (toutes distributions) | `.AppImage` |",
-                "",
-                "Binaires non signés par un éditeur (signature ad hoc sur macOS) :",
-                "- **macOS** : au premier lancement, Réglages Système → Confidentialité et sécurité → « Ouvrir quand même », ou `xattr -cr \"/Applications/Venice Desktop.app\"`",
-                "- **Windows** : SmartScreen → « Informations complémentaires » → « Exécuter quand même »",
-              ].join("\n"),
-              draft: true,
-              prerelease: false,
-            });
-            return data.id;
+            // L'API des releases renvoie parfois 500/502 après ~10 s, la release étant parfois
+            // créée quand même : nouvel essai espacé, sauf si le brouillon existe déjà.
+            const delays = [0, 20, 40, 80, 160];
+            for (const [i, wait] of delays.entries()) {
+              await new Promise((r) => setTimeout(r, wait * 1000));
+              const found = (await drafts().catch(() => [])).find((r) => r.tag_name === tag);
+              if (found) return found.id;
+              try {
+                return (await create()).data.id;
+              } catch (e) {
+                if (e.status && e.status < 500) throw e;
+                core.warning(`Création du brouillon : essai ${i + 1}/${delays.length} en échec (${e.status ?? e.message}).`);
+                if (i === delays.length - 1) throw e;
+              }
+            }
+            function create() {
+              return github.rest.repos.createRelease({
+                ...repo,
+                tag_name: tag,
+                target_commitish: context.sha,
+                name: `Venice Desktop v${process.env.VERSION}`,
+                body: [
+                  "## Téléchargements",
+                  "",
+                  "| Système | Fichier |",
+                  "|---|---|",
+                  "| macOS Apple Silicon / ARM (M1…M4) | `Venice.Desktop_*_arm64.dmg` |",
+                  "| Windows | `Venice.Desktop_*_x64-setup.exe` ou `Venice.Desktop_*_x64_fr-FR.msi` |",
+                  "| Linux Debian/Ubuntu | `.deb` |",
+                  "| Linux Fedora/openSUSE | `.rpm` |",
+                  "| Linux (toutes distributions) | `.AppImage` |",
+                  "",
+                  "Binaires non signés par un éditeur (signature ad hoc sur macOS) :",
+                  "- **macOS** : au premier lancement, Réglages Système → Confidentialité et sécurité → « Ouvrir quand même », ou `xattr -cr \"/Applications/Venice Desktop.app\"`",
+                  "- **Windows** : SmartScreen → « Informations complémentaires » → « Exécuter quand même »",
+                ].join("\n"),
+                draft: true,
+                prerelease: false,
+              });
+            }
 
   build:
     needs: create-release
@@ -183,7 +199,7 @@ jobs:
             } catch (e) {
               if (e.status !== 422) throw e; // 422 : le tag existe déjà
             }
-            const delays = [0, 15, 30, 60, 120];
+            const delays = [0, 20, 40, 80, 160];
             for (const [i, wait] of delays.entries()) {
               await new Promise((r) => setTimeout(r, wait * 1000));
               try {
